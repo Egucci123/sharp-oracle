@@ -602,7 +602,7 @@ def call_claude(messages, system=None, max_tokens=4096):
             'x-api-key': APIKEY,
             'anthropic-version': '2023-06-01',
             'content-type': 'application/json',
-            'anthropic-dangerous-direct-browser-access': 'true',
+            '': 'true',
         },
         method='POST',
     )
