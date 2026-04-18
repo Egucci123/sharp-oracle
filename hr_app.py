@@ -22,7 +22,7 @@ import urllib.error
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 import os
 PORT   = int(os.environ.get('PORT', 5555))
-APIKEY = os.environ.get('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', '')
+APIKEY = os.environ.get('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', '')
 MODEL  = "claude-haiku-4-5-20251001"
 
 # ─── LOCKED MODEL RULES ───────────────────────────────────────────────────────
