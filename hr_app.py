@@ -1096,7 +1096,7 @@ def build_context_str(parsed, all_statcast):
     for p in all_statcast:
         if p.get('role') != 'PITCHER':
             continue
-        score, gate, breakdown = compute_pitcher_gate(p)
+        score, gate, breakdown, bonus = compute_pitcher_gate(p)
         # Key by faces_team: this pitcher will face these batters
         faces = p.get('faces_team') or p.get('team','')
         pitcher_gates[faces] = {
@@ -1108,10 +1108,11 @@ def build_context_str(parsed, all_statcast):
         gap_dir = 'COLD' if (g is not None and g > 0) else ('HOT' if (g is not None and g < 0) else 'NEUTRAL')
         proxy = '[PROXY] ' if 'not found' in str(p.get('fetch_status','')) or 'no stat' in str(p.get('fetch_status','')) else ''
         faces = p.get('faces_team') or '?'
+        bonus_display = f' | {bonus}' if bonus else ''
         lines.append(
             f"  {proxy}{p.get('name','?')} ({p.get('hand','?')}HP) "
             f"[pitches for {p.get('team','?')}, FACES {faces} batters] | "
-            f"GATE={score}/4={gate} | gap={gs}({gap_dir}) | {breakdown}"
+            f"GATE={score}/4={gate} | gap={gs}({gap_dir}) | {breakdown}{bonus_display}"
         )
     lines.append('')
 
