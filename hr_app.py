@@ -36,6 +36,11 @@ BATTER GRADE (0-4 pts):
   A=3.5-4/4+fav platoon | A-=4/4+same OR 3.5/4+fav | B+=situational | B=dart | C=override only
 
 PLATOON: LHB vs RHP=fav | RHB vs LHP=fav | Switch=fav | Same-side=drops half grade
+EV THRESHOLD: 91 mph (lowered from 93 — research shows 91+ is meaningfully above MLB avg ~90mph)
+EV50 FLAGS: EV50=ELITE(>=103mph) | EV50=PLUS(>=100mph) — hardest 50% EV, better power predictor
+FB% FLAGS: FB%=HIGH(>=45%) strong fly ball hitter | FB%=SOLID(>=38%) | FB%=LOW-GROUNDER(<25%) HR suppressor
+  EV50=ELITE + FB%=HIGH = upgrade HR grade half step (raw power converting to air)
+  FB%=LOW-GROUNDER = hard HR suppressor regardless of EV/barrel metrics
 xSLG FLAGS: xSLG=ELITE(>=.600)=power tier, adds to HR grade | xSLG=POWER(>=.500)=strong HR candidate
 SWEET SPOT FLAGS: SS%=ELITE(>=38%)=elite launch consistency | SS%=SOLID(>=30%)=good plane
   xSLG>=.600 + 3+/4 thresholds = upgrade half step on HR grade
@@ -218,7 +223,7 @@ def _load_leaderboard(player_type='batter'):
 
     url = (
         f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
-        f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1'
+        f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=0'
     )
     raw = savant_get(url, accept_json=True)
     if not raw:
@@ -288,7 +293,7 @@ def _load_statcast_cache():
             return _statcast_cache
     url = (
         f'https://baseballsavant.mlb.com/leaderboard/statcast'
-        f'?type=batter&year={CURRENT_YEAR}&position=&team=&min=1'
+        f'?type=batter&year={CURRENT_YEAR}&position=&team=&min=0'
     )
     raw = savant_get(url, accept_json=True)
     if not raw:
@@ -334,9 +339,24 @@ def _name_match_score(row, target):
     return best
 
 
+# Known player IDs for players that commonly fail name matching
+KNOWN_PLAYER_IDS = {
+    'jose ramirez': '608070',
+    'jose ramírez': '608070',
+    'christian vazquez': '477132',
+    'christian vázquez': '477132',
+    'j.d. martinez': '502110',
+    'jd martinez': '502110',
+    'michael a. taylor': '534606',
+}
+
 def lookup_player_in_leaderboard(name, player_type='batter'):
     """Find player stats directly from leaderboard by name matching.
     Also enriches with xSLG and SS% from the statcast leaderboard."""
+    # Check known IDs first
+    name_key = normalize_name(name).lower()
+    forced_pid = KNOWN_PLAYER_IDS.get(name_key)
+
     rows = _load_leaderboard(player_type)
     if not rows:
         return None, None
@@ -344,15 +364,24 @@ def lookup_player_in_leaderboard(name, player_type='batter'):
     best_score = 0
     best_row = None
     for row in rows:
+        row_pid = str(row.get('player_id') or row.get('batter') or row.get('pitcher') or '')
+        # If we have a forced pid, match by ID first
+        if forced_pid and row_pid == forced_pid:
+            best_row = row
+            best_score = 100
+            break
         score = _name_match_score(row, name)
         if score > best_score:
             best_score = score
             best_row = row
 
     if best_score < 2 or best_row is None:
+        # Last resort: use forced_pid and fetch directly
+        if forced_pid:
+            return forced_pid, None
         return None, None
 
-    pid = str(best_row.get('player_id') or best_row.get('batter') or best_row.get('pitcher') or '')
+    pid = str(best_row.get('player_id') or best_row.get('batter') or best_row.get('pitcher') or '') or forced_pid or ''
     stats = _extract_leaderboard_row(best_row)
 
     # Enrich with xSLG and SS% from statcast leaderboard (different endpoint)
@@ -371,10 +400,12 @@ def lookup_player_in_leaderboard(name, player_type='batter'):
                     return None
                 xslg = g('xslg', 'est_slg', 'xslg_percent')
                 ssp  = g('la_sweet_spot_percent', 'sweet_spot_percent', 'sweet_spot_pct')
-                if xslg is not None:
-                    stats['xslg'] = xslg
-                if ssp is not None:
-                    stats['sweet_spot_pct'] = ssp
+                ev50 = g('ev50', 'ev_50', 'best_speed')
+                fb   = g('fb_percent', 'flyball_percent', 'fb_pct', 'fly_ball_percent')
+                if xslg is not None: stats['xslg'] = xslg
+                if ssp  is not None: stats['sweet_spot_pct'] = ssp
+                if ev50 is not None: stats['ev50'] = ev50
+                if fb   is not None: stats['fb_pct'] = fb
                 break
 
     return pid, stats
@@ -391,6 +422,8 @@ SANE = {
     'sweet_spot_pct': (0.0, 100.0),    # launch angle sweet spot %
     'gb_pct':         (0.0, 100.0),    # ground ball % (pitchers)
     'csw_pct':        (0.0, 60.0),     # called strike + whiff %
+    'ev50':           (70.0, 125.0),   # hardest 50% EV — better power predictor than avg EV
+    'fb_pct':         (0.0, 100.0),    # flyball rate (batters)
 }
 
 
@@ -665,6 +698,8 @@ def _extract_leaderboard_row(row):
         'barrel_pct':     g('barrel_batted_rate', 'barrel_pct', 'barrels_per_bbe_percent', 'brl_percent'),
         'xslg':           g('xslg', 'est_slg', 'xslg_percent'),
         'sweet_spot_pct': g('la_sweet_spot_percent', 'sweet_spot_percent', 'sweet_spot_pct', 'solidcontact_percent'),
+        'ev50':           g('ev50', 'ev_50', 'best_speed'),
+        'fb_pct':         g('fb_percent', 'flyball_percent', 'fb_pct', 'fly_ball_percent'),
     }
 
 
@@ -782,7 +817,7 @@ def fetch_one_player(info):
         **info,
         'exit_velocity': None, 'hard_hit_pct': None,
         'woba': None, 'xwoba': None, 'barrel_pct': None,
-        'xslg': None, 'sweet_spot_pct': None,
+        'xslg': None, 'sweet_spot_pct': None, 'ev50': None, 'fb_pct': None,
         'gb_pct': None, 'csw_pct': None,
         'gap': None, 'player_id': None,
         'fetch_status': 'not found',
@@ -1204,7 +1239,8 @@ def compute_batter_score(b):
     if xw  is not None and xw  >= 0.350: score += 1; pts.append(f'xwOBA={xw}✓')
     else: pts.append(f'xwOBA={xw if xw is not None else "N/A"}✗')
 
-    if ev  is not None and ev  >= 93.0: score += 1; pts.append(f'EV={ev}✓')
+    # EV threshold lowered from 93 to 91 — research shows 91+ is meaningfully above avg
+    if ev  is not None and ev  >= 91.0: score += 1; pts.append(f'EV={ev}✓')
     else: pts.append(f'EV={ev if ev is not None else "N/A"}✗')
 
     if hh  is not None and hh  >= 50.0: score += 1; pts.append(f'HH%={hh}✓')
@@ -1220,7 +1256,7 @@ def compute_batter_score(b):
     else:
         gap_flag = 'N/A'
 
-    # xSLG power flag — additional context, not a gate threshold
+    # xSLG power flag
     xslg = b.get('xslg')
     xslg_flag = ''
     if xslg is not None:
@@ -1228,12 +1264,27 @@ def compute_batter_score(b):
         elif xslg >= 0.500: xslg_flag = ' xSLG=POWER'
         elif xslg >= 0.400: xslg_flag = ' xSLG=AVG'
 
-    # Sweet Spot % — launch consistency flag
+    # Sweet Spot % — launch consistency
     ssp = b.get('sweet_spot_pct')
     ssp_flag = ''
     if ssp is not None:
         if ssp >= 38:   ssp_flag = ' SS%=ELITE'
         elif ssp >= 30: ssp_flag = ' SS%=SOLID'
+
+    # EV50 — hardest 50% of batted balls, better power predictor than avg EV
+    ev50 = b.get('ev50')
+    ev50_flag = ''
+    if ev50 is not None:
+        if ev50 >= 103:  ev50_flag = ' EV50=ELITE'
+        elif ev50 >= 100: ev50_flag = ' EV50=PLUS'
+
+    # FB% — flyball rate, needed to convert hard contact into HRs
+    fb = b.get('fb_pct')
+    fb_flag = ''
+    if fb is not None:
+        if fb >= 45:   fb_flag = ' FB%=HIGH'
+        elif fb >= 38: fb_flag = ' FB%=SOLID'
+        elif fb < 25:  fb_flag = ' FB%=LOW-GROUNDER'
 
     hr_cap = ''
     if gap is not None and gap < 0:
@@ -1245,7 +1296,7 @@ def compute_batter_score(b):
             hit_tag = ' HIT-PICK-YES' if (wo is not None and wo >= 0.320) else ''
             hr_cap = f' HR-CAP-B{hit_tag}'
 
-    extra_flags = xslg_flag + ssp_flag
+    extra_flags = xslg_flag + ssp_flag + ev50_flag + fb_flag
     return score, ' | '.join(pts), gap_flag, hr_cap, extra_flags
 
 
@@ -1339,10 +1390,12 @@ def build_context_str(parsed, all_statcast):
             proxy = '[PROXY] ' if 'not found' in str(b.get('fetch_status','')) or 'no stat' in str(b.get('fetch_status','')) else ''
             xslg_str = f" xSLG={b.get('xslg','N/A')}" if b.get('xslg') is not None else ''
             ssp_str  = f" SS%={b.get('sweet_spot_pct','N/A')}" if b.get('sweet_spot_pct') is not None else ''
+            ev50_str = f" EV50={b.get('ev50','N/A')}" if b.get('ev50') is not None else ''
+            fb_str   = f" FB%={b.get('fb_pct','N/A')}" if b.get('fb_pct') is not None else ''
             lines.append(
                 f"  #{b.get('lineup_pos','?')} {proxy}{b.get('name','?')} ({b.get('hand','?')}HB) | "
                 f"SCORE={score}/4 | plat={platoon} | gap={gs}({gap_flag}){hr_cap}{extra_flags} | "
-                f"wOBA={b.get('woba','N/A')}{xslg_str}{ssp_str} | {breakdown}"
+                f"wOBA={b.get('woba','N/A')}{xslg_str}{ssp_str}{ev50_str}{fb_str} | {breakdown}"
             )
         lines.append('')
 
@@ -1666,7 +1719,7 @@ tr:hover td{background:var(--s2)}
         <table>
           <thead><tr>
             <th>PLAYER</th><th>ROLE</th><th>BRL%</th><th>EV</th><th>HH%</th>
-            <th>xwOBA</th><th>xSLG</th><th>SS%</th><th>wOBA</th><th>GAP</th><th>STATUS</th>
+            <th>xwOBA</th><th>xSLG</th><th>SS%</th><th>EV50</th><th>FB%</th><th>wOBA</th><th>GAP</th><th>STATUS</th>
           </tr></thead>
           <tbody id="tblBody"></tbody>
         </table>
@@ -1851,6 +1904,8 @@ function renderTable(data) {
       `<td>${f(p.xwoba, .350)}</td>` +
       `<td>${f(p.xslg, .500)}</td>` +
       `<td>${f(p.sweet_spot_pct, 30)}</td>` +
+      `<td>${f(p.ev50, 100)}</td>` +
+      `<td>${f(p.fb_pct, 38)}</td>` +
       `<td>${p.woba != null ? p.woba : '<span class="na">N/A</span>'}</td>` +
       `<td class="${gapc}">${gap}</td>` +
       `<td class="${p.fetch_status === 'ok' ? 'ok' : 'nf'}">${p.fetch_status||'\u2014'}</td>`;
