@@ -400,13 +400,31 @@ def lookup_player_in_leaderboard(name, player_type='batter'):
                     return None
                 xslg = g('xslg', 'est_slg', 'xslg_percent')
                 ssp  = g('la_sweet_spot_percent', 'sweet_spot_percent', 'sweet_spot_pct')
-                ev50 = g('ev50', 'ev_50', 'best_speed')
+                ev50 = g('avg_best_speed', 'ev50', 'ev_50', 'best_speed')
                 fb   = g('fb_percent', 'flyball_percent', 'fb_pct', 'fly_ball_percent')
                 if xslg is not None: stats['xslg'] = xslg
                 if ssp  is not None: stats['sweet_spot_pct'] = ssp
                 if ev50 is not None: stats['ev50'] = ev50
                 if fb   is not None: stats['fb_pct'] = fb
                 break
+        # Also pull FB% from batter batted-ball leaderboard if not found yet
+        if stats.get('fb_pct') is None and pid:
+            bb_rows = _load_batter_batted_ball_cache()
+            for bb_row in bb_rows:
+                bb_pid = str(bb_row.get('player_id') or bb_row.get('batter') or '')
+                if bb_pid == pid:
+                    def g3(*keys):
+                        for k in keys:
+                            v = bb_row.get(k)
+                            if v not in (None, '', 'null', 'None'):
+                                f = safe_float(v)
+                                if f is not None:
+                                    return f
+                        return None
+                    fb = g3('fb_percent', 'flyball_percent', 'fly_ball_percent', 'fb_pct')
+                    if fb is not None:
+                        stats['fb_pct'] = fb
+                    break
 
     return pid, stats
 
@@ -698,8 +716,8 @@ def _extract_leaderboard_row(row):
         'barrel_pct':     g('barrel_batted_rate', 'barrel_pct', 'barrels_per_bbe_percent', 'brl_percent'),
         'xslg':           g('xslg', 'est_slg', 'xslg_percent'),
         'sweet_spot_pct': g('la_sweet_spot_percent', 'sweet_spot_percent', 'sweet_spot_pct', 'solidcontact_percent'),
-        'ev50':           g('ev50', 'ev_50', 'best_speed'),
-        'fb_pct':         g('fb_percent', 'flyball_percent', 'fb_pct', 'fly_ball_percent'),
+        'ev50':           g('avg_best_speed', 'ev50', 'ev_50', 'best_speed'),
+        'fb_pct':         g('fb_percent', 'flyball_percent', 'fb_pct', 'fly_ball_percent', 'fly_ball_rate'),
     }
 
 
@@ -2020,6 +2038,37 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == '/api/rules':
             self._json({'rules': LOCKED_RULES})
+        elif path == '/api/debug':
+            # Debug endpoint: shows raw leaderboard fields for a player
+            # Usage: /api/debug?name=James+Wood
+            from urllib.parse import parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            name = qs.get('name', [''])[0]
+            if not name:
+                self._json({'error': 'Pass ?name=PlayerName'})
+                return
+            rows = _load_leaderboard('batter')
+            sc_rows = _load_statcast_cache()
+            bb_rows = _load_batter_batted_ball_cache()
+            # Find in expected stats
+            best = None
+            for row in rows:
+                if _name_match_score(row, name) >= 2:
+                    best = row
+                    break
+            pid = str(best.get('player_id') or best.get('batter') or '') if best else None
+            sc_best = next((r for r in sc_rows if str(r.get('player_id') or r.get('batter','')) == pid), None) if pid else None
+            bb_best = next((r for r in bb_rows if str(r.get('player_id') or r.get('batter','')) == pid), None) if pid else None
+            self._json({
+                'name': name,
+                'pid': pid,
+                'expected_stats_keys': sorted(best.keys()) if best else [],
+                'statcast_keys': sorted(sc_best.keys()) if sc_best else [],
+                'batted_ball_keys': sorted(bb_best.keys()) if bb_best else [],
+                'expected_stats_sample': {k: best.get(k) for k in ['avg_hit_speed','hard_hit_percent','xwoba','woba','barrel_batted_rate','xslg','sweet_spot_percent','avg_best_speed','fb_percent','flyball_percent']} if best else {},
+                'statcast_sample': {k: sc_best.get(k) for k in ['avg_best_speed','sweet_spot_percent','fb_percent','flyball_percent','xslg','la_sweet_spot_percent']} if sc_best else {},
+                'batted_ball_sample': {k: bb_best.get(k) for k in ['fb_percent','flyball_percent','fly_ball_percent','gb_percent']} if bb_best else {},
+            })
         else:
             self.send_response(404)
             self.end_headers()
