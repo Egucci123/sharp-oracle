@@ -193,19 +193,21 @@ _HEADERS = {
 # Pull the full 2026 leaderboard once and cache it for the session.
 # This avoids per-player search requests that Savant rate-limits aggressively.
 _leaderboard_cache = {'batter': None, 'pitcher': None}
-_batted_ball_cache = None   # pitcher GB% data
-_arsenal_cache = None       # pitcher CSW% data
+_statcast_cache = None       # batter xSLG + SS% data
+_batted_ball_cache = None    # pitcher GB% data
+_arsenal_cache = None        # pitcher CSW% data
 _cache_lock = threading.Lock()
 
 
 def clear_leaderboard_cache():
     """Clear all caches so next run pulls fresh data."""
-    global _batted_ball_cache, _arsenal_cache
+    global _batted_ball_cache, _arsenal_cache, _statcast_cache
     with _cache_lock:
         _leaderboard_cache['batter'] = None
         _leaderboard_cache['pitcher'] = None
         _batted_ball_cache = None
         _arsenal_cache = None
+        _statcast_cache = None
 
 
 def _load_leaderboard(player_type='batter'):
@@ -278,27 +280,63 @@ def _load_arsenal_cache():
         return []
 
 
+def _load_statcast_cache():
+    """Pull full 2026 Statcast leaderboard (xSLG, SS%) once and cache."""
+    global _statcast_cache
+    with _cache_lock:
+        if _statcast_cache is not None:
+            return _statcast_cache
+    url = (
+        f'https://baseballsavant.mlb.com/leaderboard/statcast'
+        f'?type=batter&year={CURRENT_YEAR}&position=&team=&min=1'
+    )
+    raw = savant_get(url, accept_json=True)
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        rows = data if isinstance(data, list) else data.get('data', [])
+        with _cache_lock:
+            _statcast_cache = rows
+        return rows
+    except Exception:
+        return []
+
+
 def _name_match_score(row, target):
     """Score a leaderboard row against a target name. Higher = better match."""
     target = normalize_name(target).lower()
-    # Savant format: last_name, first_name fields
+    # Savant format varies: last_name+first_name fields OR combined name field
     first = normalize_name(str(row.get('first_name', ''))).lower()
     last  = normalize_name(str(row.get('last_name', ''))).lower()
-    full1 = f"{first} {last}"
-    full2 = f"{last} {first}"
-    full3 = f"{last}, {first}"
+    # Also handle combined name field
+    combined = normalize_name(str(row.get('name', '') or row.get('player_name', ''))).lower()
 
-    if target in (full1, full2, full3):
+    full1 = f"{first} {last}".strip()
+    full2 = f"{last} {first}".strip()
+    full3 = f"{last}, {first}".strip()
+
+    candidates = [c for c in [full1, full2, full3, combined] if c.strip()]
+
+    if target in candidates:
         return 100  # exact
 
-    # Partial: count matching words
+    # Check combined name field exact match
+    if combined and target == combined:
+        return 100
+
+    # Partial: count matching words against best candidate
     parts = target.split()
-    score = sum(2 if p == last else 1 for p in parts if p in full1)
-    return score
+    best = 0
+    for cand in candidates:
+        score = sum(2 if p == last else 1 for p in parts if p in cand)
+        best = max(best, score)
+    return best
 
 
 def lookup_player_in_leaderboard(name, player_type='batter'):
-    """Find player stats directly from leaderboard by name matching."""
+    """Find player stats directly from leaderboard by name matching.
+    Also enriches with xSLG and SS% from the statcast leaderboard."""
     rows = _load_leaderboard(player_type)
     if not rows:
         return None, None
@@ -311,11 +349,35 @@ def lookup_player_in_leaderboard(name, player_type='batter'):
             best_score = score
             best_row = row
 
-    if best_score >= 2 and best_row is not None:
-        pid = str(best_row.get('player_id') or best_row.get('batter') or best_row.get('pitcher') or '')
-        return pid, _extract_leaderboard_row(best_row)
+    if best_score < 2 or best_row is None:
+        return None, None
 
-    return None, None
+    pid = str(best_row.get('player_id') or best_row.get('batter') or best_row.get('pitcher') or '')
+    stats = _extract_leaderboard_row(best_row)
+
+    # Enrich with xSLG and SS% from statcast leaderboard (different endpoint)
+    if player_type == 'batter' and pid:
+        sc_rows = _load_statcast_cache()
+        for sc_row in sc_rows:
+            sc_pid = str(sc_row.get('player_id') or sc_row.get('batter') or '')
+            if sc_pid == pid:
+                def g(*keys):
+                    for k in keys:
+                        v = sc_row.get(k)
+                        if v not in (None, '', 'null', 'None'):
+                            f = safe_float(v)
+                            if f is not None:
+                                return f
+                    return None
+                xslg = g('xslg', 'est_slg', 'xslg_percent')
+                ssp  = g('la_sweet_spot_percent', 'sweet_spot_percent', 'sweet_spot_pct')
+                if xslg is not None:
+                    stats['xslg'] = xslg
+                if ssp is not None:
+                    stats['sweet_spot_pct'] = ssp
+                break
+
+    return pid, stats
 
 
 # Sanity ranges — if a parsed value is outside these it's a bad parse, discard it
