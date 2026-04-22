@@ -422,7 +422,7 @@ def lookup_player_in_leaderboard(name, player_type='batter'):
                                 return f
                     return None
                 xslg = g('xslg', 'est_slg', 'xslg_percent')
-                ssp  = g('la_sweet_spot_percent', 'sweet_spot_percent', 'sweet_spot_pct')
+                ssp  = g('sweet_spot_percent', 'la_sweet_spot_percent', 'sweet_spot_pct', 'ideal_angle_rate')
                 ev50 = g('avg_best_speed', 'ev50', 'ev_50', 'best_speed')
                 fb   = g('fb_percent', 'flyball_percent', 'fb_pct', 'fly_ball_percent')
                 if xslg is not None: stats['xslg'] = xslg
@@ -737,10 +737,10 @@ def _extract_leaderboard_row(row):
         'woba':           g('woba', 'w_oba'),
         'xwoba':          g('xwoba', 'xw_oba', 'est_woba'),
         'barrel_pct':     g('barrel_batted_rate', 'barrel_pct', 'barrels_per_bbe_percent', 'brl_percent'),
-        'xslg':           g('xslg', 'est_slg', 'xslg_percent'),
-        'sweet_spot_pct': g('la_sweet_spot_percent', 'sweet_spot_percent', 'sweet_spot_pct', 'solidcontact_percent'),
-        'ev50':           g('avg_best_speed', 'ev50', 'ev_50', 'best_speed'),
-        'fb_pct':         g('fb_percent', 'flyball_percent', 'fb_pct', 'fly_ball_percent', 'fly_ball_rate'),
+        'xslg':           g('xslg', 'est_slg', 'xslg_percent', 'est_slugging'),
+        'sweet_spot_pct': g('sweet_spot_percent', 'la_sweet_spot_percent', 'sweet_spot_pct', 'solidcontact_percent', 'ideal_angle_rate'),
+        'ev50':           g('avg_best_speed', 'ev50', 'ev_50', 'best_speed', 'avg_hyper_speed', 'hyper_speed'),
+        'fb_pct':         g('fb_percent', 'flyball_percent', 'fb_pct', 'fly_ball_percent', 'fly_ball_rate', 'flyballs_percent'),
     }
 
 
@@ -2062,38 +2062,46 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/rules':
             self._json({'rules': LOCKED_RULES})
         elif path == '/api/debug':
-            # Debug endpoint: shows raw leaderboard fields for a player
-            # Usage: /api/debug?name=James+Wood
-            from urllib.parse import parse_qs
-            qs = parse_qs(urlparse(self.path).query)
-            name = qs.get('name', [''])[0]
-            if not name:
-                self._json({'error': 'Pass ?name=PlayerName'})
-                return
-            # Force load all caches fresh
-            clear_leaderboard_cache()
-            rows = _load_leaderboard('batter')
-            sc_rows = _load_statcast_cache()
-            bb_rows = _load_batter_batted_ball_cache()
-            # Find in expected stats
-            best = None
-            for row in rows:
-                if _name_match_score(row, name) >= 2:
-                    best = row
-                    break
-            pid = str(best.get('player_id') or best.get('batter') or '') if best else None
-            sc_best = next((r for r in sc_rows if str(r.get('player_id') or r.get('batter','')) == pid), None) if pid else None
-            bb_best = next((r for r in bb_rows if str(r.get('player_id') or r.get('batter','')) == pid), None) if pid else None
-            self._json({
-                'name': name,
-                'pid': pid,
-                'expected_stats_keys': sorted(best.keys()) if best else [],
-                'statcast_keys': sorted(sc_best.keys()) if sc_best else [],
-                'batted_ball_keys': sorted(bb_best.keys()) if bb_best else [],
-                'expected_stats_sample': {k: best.get(k) for k in ['avg_hit_speed','hard_hit_percent','xwoba','woba','barrel_batted_rate','xslg','sweet_spot_percent','avg_best_speed','fb_percent','flyball_percent']} if best else {},
-                'statcast_sample': {k: sc_best.get(k) for k in ['avg_best_speed','sweet_spot_percent','fb_percent','flyball_percent','xslg','la_sweet_spot_percent']} if sc_best else {},
-                'batted_ball_sample': {k: bb_best.get(k) for k in ['fb_percent','flyball_percent','fly_ball_percent','gb_percent']} if bb_best else {},
-            })
+            try:
+                from urllib.parse import parse_qs
+                qs = parse_qs(urlparse(self.path).query)
+                name = qs.get('name', [''])[0]
+                if not name:
+                    self._json({'error': 'Pass ?name=PlayerName'})
+                    return
+                clear_leaderboard_cache()
+                rows = _load_leaderboard('batter')
+                best = None
+                for row in rows:
+                    if _name_match_score(row, name) >= 2:
+                        best = row
+                        break
+                if not best:
+                    self._json({'error': f'Not found: {name}', 'row_count': len(rows)})
+                    return
+                pid = str(best.get('player_id') or best.get('batter') or '')
+                try:
+                    sc_rows = _load_statcast_cache()
+                    sc_best = next((r for r in sc_rows if str(r.get('player_id') or r.get('batter','')) == pid), None)
+                except Exception:
+                    sc_best = None
+                try:
+                    bb_rows = _load_batter_batted_ball_cache()
+                    bb_best = next((r for r in bb_rows if str(r.get('player_id') or r.get('batter','')) == pid), None)
+                except Exception:
+                    bb_best = None
+                self._json({
+                    'name': name, 'pid': pid,
+                    'expected_keys': sorted(best.keys()),
+                    'statcast_keys': sorted(sc_best.keys()) if sc_best else [],
+                    'batted_ball_keys': sorted(bb_best.keys()) if bb_best else [],
+                    'expected_sample': {k:v for k,v in best.items() if any(x in k for x in ['speed','hit','slg','woba','barrel','sweet','fly','fb','ev','xslg'])},
+                    'statcast_sample': {k:v for k,v in sc_best.items() if any(x in k for x in ['speed','hit','slg','woba','barrel','sweet','fly','fb','ev','xslg'])} if sc_best else {},
+                    'batted_ball_sample': {k:v for k,v in bb_best.items() if any(x in k for x in ['fb','fly','gb','barrel','speed'])} if bb_best else {},
+                })
+            except Exception as ex:
+                import traceback
+                self._json({'error': str(ex), 'trace': traceback.format_exc()})
         else:
             self.send_response(404)
             self.end_headers()
