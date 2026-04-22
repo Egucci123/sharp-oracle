@@ -1160,7 +1160,15 @@ def parse_lineup_claude(raw, game_date=None):
         t2_lower = team2.lower()
         home_lower = home_name.lower()
         # Match by shared words
-        t1_is_home = any(w in home_lower for w in t1_lower.split() if len(w) > 3)
+        # Match team1 to home — check words length > 2 (catches MIL, DET, etc)
+        # Also try full string containment
+        t1_words_match = any(w in home_lower for w in t1_lower.split() if len(w) > 2)
+        t2_words_match = any(w in home_lower for w in t2_lower.split() if len(w) > 2)
+        t1_is_home = t1_words_match and not t2_words_match or (
+            t1_words_match and t2_words_match and
+            sum(1 for w in t1_lower.split() if w in home_lower and len(w) > 2) >
+            sum(1 for w in t2_lower.split() if w in home_lower and len(w) > 2)
+        )
         if t1_is_home:
             home_team  = team1
             away_team  = team2
@@ -2070,14 +2078,29 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({'error': 'Pass ?name=PlayerName'})
                     return
                 clear_leaderboard_cache()
+                # Test individual player page fetch
+                pid = search_player_id(name)
+                lb_pid, lb_stats = lookup_player_in_leaderboard(name, 'batter')
+                # Also test bulk
                 rows = _load_leaderboard('batter')
                 best = None
                 for row in rows:
                     if _name_match_score(row, name) >= 2:
                         best = row
                         break
+                if not best and not pid:
+                    self._json({'error': f'Not found: {name}', 'bulk_rows': len(rows), 'search_pid': pid, 'lb_pid': lb_pid})
+                    return
                 if not best:
-                    self._json({'error': f'Not found: {name}', 'row_count': len(rows)})
+                    # Individual fetch worked but bulk blocked
+                    page_stats = fetch_from_player_page(pid) if pid else None
+                    self._json({
+                        'name': name, 'pid': pid, 'lb_pid': lb_pid,
+                        'bulk_rows': len(rows),
+                        'lb_stats': lb_stats,
+                        'page_stats': page_stats,
+                        'note': 'Bulk leaderboard blocked — using individual fetch'
+                    })
                     return
                 pid = str(best.get('player_id') or best.get('batter') or '')
                 try:
