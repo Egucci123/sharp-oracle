@@ -70,8 +70,8 @@ NOISE RULE: below-threshold batters going deep vs elite = variance, never adjust
 
 OUTPUT (always all 9):
 1. Pitcher grades 2. Full 18-batter table 3. Park+weather 4. Upgrades #1-#14
-5. Formal picks 6. Gun-to-head top 5 HR 7. Gun-to-head top 5 hits
-8. 3-leg HR parlay 9. 5-leg hit parlay
+5. Formal picks 6. Gun-to-head TOP 2 HR 7. Gun-to-head TOP 2 hits
+8. Holy Grail HR parlay (3-leg, only if 2+ A/A- exist) 9. Holy Grail hit parlay (5-leg, no fillers)
 """
 
 SYSTEM_PROMPT = (
@@ -188,6 +188,136 @@ _HEADERS = {
     'Referer': 'https://baseballsavant.mlb.com/',
 }
 
+
+# ─── LEADERBOARD CACHE ────────────────────────────────────────────────────────
+# Pull the full 2026 leaderboard once and cache it for the session.
+# This avoids per-player search requests that Savant rate-limits aggressively.
+_leaderboard_cache = {'batter': None, 'pitcher': None}
+_batted_ball_cache = None   # pitcher GB% data
+_arsenal_cache = None       # pitcher CSW% data
+_cache_lock = threading.Lock()
+
+
+def clear_leaderboard_cache():
+    """Clear all caches so next run pulls fresh data."""
+    global _batted_ball_cache, _arsenal_cache
+    with _cache_lock:
+        _leaderboard_cache['batter'] = None
+        _leaderboard_cache['pitcher'] = None
+        _batted_ball_cache = None
+        _arsenal_cache = None
+
+
+def _load_leaderboard(player_type='batter'):
+    """Pull full 2026 leaderboard for batters or pitchers. Cached per job run."""
+    with _cache_lock:
+        if _leaderboard_cache[player_type] is not None:
+            return _leaderboard_cache[player_type]
+
+    url = (
+        f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
+        f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1'
+    )
+    raw = savant_get(url, accept_json=True)
+    if not raw:
+        return []
+
+    try:
+        data = json.loads(raw)
+        rows = data if isinstance(data, list) else data.get('data', [])
+        with _cache_lock:
+            _leaderboard_cache[player_type] = rows
+        return rows
+    except Exception:
+        return []
+
+
+def _load_batted_ball_cache():
+    """Pull full 2026 pitcher batted-ball leaderboard (GB%) once and cache."""
+    global _batted_ball_cache
+    with _cache_lock:
+        if _batted_ball_cache is not None:
+            return _batted_ball_cache
+    url = (
+        f'https://baseballsavant.mlb.com/leaderboard/batted-ball'
+        f'?type=pitcher&year={CURRENT_YEAR}'
+    )
+    raw = savant_get(url, accept_json=True)
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        rows = data if isinstance(data, list) else data.get('data', [])
+        with _cache_lock:
+            _batted_ball_cache = rows
+        return rows
+    except Exception:
+        return []
+
+
+def _load_arsenal_cache():
+    """Pull full 2026 pitcher arsenal leaderboard (CSW%) once and cache."""
+    global _arsenal_cache
+    with _cache_lock:
+        if _arsenal_cache is not None:
+            return _arsenal_cache
+    url = (
+        f'https://baseballsavant.mlb.com/leaderboard/pitch-arsenals'
+        f'?type=pitcher&year={CURRENT_YEAR}'
+    )
+    raw = savant_get(url, accept_json=True)
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        rows = data if isinstance(data, list) else data.get('data', [])
+        with _cache_lock:
+            _arsenal_cache = rows
+        return rows
+    except Exception:
+        return []
+
+
+def _name_match_score(row, target):
+    """Score a leaderboard row against a target name. Higher = better match."""
+    target = normalize_name(target).lower()
+    # Savant format: last_name, first_name fields
+    first = normalize_name(str(row.get('first_name', ''))).lower()
+    last  = normalize_name(str(row.get('last_name', ''))).lower()
+    full1 = f"{first} {last}"
+    full2 = f"{last} {first}"
+    full3 = f"{last}, {first}"
+
+    if target in (full1, full2, full3):
+        return 100  # exact
+
+    # Partial: count matching words
+    parts = target.split()
+    score = sum(2 if p == last else 1 for p in parts if p in full1)
+    return score
+
+
+def lookup_player_in_leaderboard(name, player_type='batter'):
+    """Find player stats directly from leaderboard by name matching."""
+    rows = _load_leaderboard(player_type)
+    if not rows:
+        return None, None
+
+    best_score = 0
+    best_row = None
+    for row in rows:
+        score = _name_match_score(row, name)
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_score >= 2 and best_row is not None:
+        pid = str(best_row.get('player_id') or best_row.get('batter') or best_row.get('pitcher') or '')
+        return pid, _extract_leaderboard_row(best_row)
+
+    return None, None
+
+
 # Sanity ranges — if a parsed value is outside these it's a bad parse, discard it
 SANE = {
     'exit_velocity':  (50.0, 120.0),   # mph
@@ -247,13 +377,27 @@ PARK_COORDS = {
 }
 
 
-def fetch_weather(park_name):
+DOME_PARKS = {
+    'American Family Field', 'Tropicana Field', 'Globe Life Field',
+    'Rogers Centre', 'LoanDepot Park',
+    # Chase Field, Minute Maid, Dodger Stadium all have retractable roofs
+    # — fetch real weather so model can apply boost/suppress correctly
+}
+
+def fetch_weather(park_name, park_category=None):
     """
     Fetch current weather for the given park.
+    Skips fetch for domes — returns DOME flag.
     Primary: NWS (api.weather.gov) — no key, US only, 2-step lookup.
     Fallback: wttr.in JSON — no key, global.
     Returns dict: {temp_f, condition, wind_mph, flag, notes}
     """
+    if park_category == 'DOME' or park_name in DOME_PARKS:
+        return {
+            'temp_f': None, 'condition': 'Dome/Indoor', 'wind_mph': None,
+            'flag': 'DOME', 'notes': 'Dome — weather not applicable'
+        }
+
     coords = PARK_COORDS.get(park_name)
     if not coords:
         for k, v in PARK_COORDS.items():
@@ -538,58 +682,35 @@ def fetch_from_player_page(player_id):
 
 def fetch_pitcher_extras(player_id):
     """
-    Fetch GB% and CSW% for pitchers from Savant batted-ball and pitch-arsenal endpoints.
-    These are on different endpoints than the expected-stats leaderboard.
+    Fetch GB% and CSW% for pitchers using cached full leaderboards.
+    Avoids per-pitcher requests that get rate-limited.
     """
     result = {'gb_pct': None, 'csw_pct': None}
 
-    # GB% from batted-ball profile leaderboard
-    bb_url = (
-        f'https://baseballsavant.mlb.com/leaderboard/batted-ball'
-        f'?type=pitcher&year={CURRENT_YEAR}&player_id={player_id}'
-    )
-    raw = savant_get(bb_url, accept_json=True)
-    if raw:
-        try:
-            data = json.loads(raw)
-            rows = data if isinstance(data, list) else data.get('data', [])
-            if rows:
-                row = rows[0]
-                def g(*keys):
-                    for k in keys:
-                        v = row.get(k)
-                        if v not in (None, '', 'null', 'None'):
-                            f = safe_float(v)
-                            if f is not None:
-                                return f
-                    return None
-                result['gb_pct'] = g('gb_percent', 'groundball_percent', 'gb_pct', 'gb')
-        except Exception:
-            pass
+    def g(row, *keys):
+        for k in keys:
+            v = row.get(k)
+            if v not in (None, '', 'null', 'None'):
+                f = safe_float(v)
+                if f is not None:
+                    return f
+        return None
 
-    # CSW% from pitch arsenal leaderboard
-    csw_url = (
-        f'https://baseballsavant.mlb.com/leaderboard/pitch-arsenals'
-        f'?type=pitcher&year={CURRENT_YEAR}&player_id={player_id}'
-    )
-    raw2 = savant_get(csw_url, accept_json=True)
-    if raw2:
-        try:
-            data2 = json.loads(raw2)
-            rows2 = data2 if isinstance(data2, list) else data2.get('data', [])
-            if rows2:
-                row2 = rows2[0]
-                def g2(*keys):
-                    for k in keys:
-                        v = row2.get(k)
-                        if v not in (None, '', 'null', 'None'):
-                            f = safe_float(v)
-                            if f is not None:
-                                return f
-                    return None
-                result['csw_pct'] = g2('csw', 'csw_pct', 'csw_percent', 'called_strike_whiff_pct')
-        except Exception:
-            pass
+    # GB% from cached batted-ball leaderboard
+    bb_rows = _load_batted_ball_cache()
+    for row in bb_rows:
+        pid = str(row.get('player_id') or row.get('pitcher') or '')
+        if pid == str(player_id):
+            result['gb_pct'] = g(row, 'gb_percent', 'groundball_percent', 'gb_pct', 'gb')
+            break
+
+    # CSW% from cached arsenal leaderboard
+    csw_rows = _load_arsenal_cache()
+    for row in csw_rows:
+        pid = str(row.get('player_id') or row.get('pitcher') or '')
+        if pid == str(player_id):
+            result['csw_pct'] = g(row, 'csw', 'csw_pct', 'csw_percent', 'called_strike_whiff_pct')
+            break
 
     return result
 
@@ -610,23 +731,32 @@ def fetch_one_player(info):
         result['fetch_status'] = 'no name'
         return result
 
-    pid = search_player_id(name)
-    if not pid:
-        result['fetch_status'] = 'id not found'
-        return result
-    result['player_id'] = pid
-
-    # Determine player type for leaderboard endpoint
     ptype = 'pitcher' if info.get('role') == 'PITCHER' else 'batter'
 
-    # Try leaderboard API first (cleanest data source)
-    raw_stats = fetch_from_leaderboard(pid, ptype)
-    source = 'leaderboard'
+    # Strategy 1: Full leaderboard name match (avoids per-player search rate limits)
+    lb_pid, raw_stats = lookup_player_in_leaderboard(name, ptype)
+    source = 'leaderboard-cache'
+    pid = None
 
-    # Fallback to player page if leaderboard returned nothing useful
-    if not raw_stats or not any(v is not None for v in raw_stats.values()):
-        raw_stats = fetch_from_player_page(pid)
-        source = 'player-page'
+    if lb_pid:
+        result['player_id'] = lb_pid
+        pid = lb_pid
+    else:
+        # Strategy 2: Per-player search fallback
+        pid = search_player_id(name)
+        if pid:
+            result['player_id'] = pid
+            raw_stats = fetch_from_leaderboard(pid, ptype)
+            source = 'leaderboard'
+
+    # Strategy 3: Player page fallback
+    if not raw_stats or not any(v is not None for v in (raw_stats or {}).values()):
+        if pid:
+            raw_stats = fetch_from_player_page(pid)
+            source = 'player-page'
+        else:
+            result['fetch_status'] = 'id not found'
+            return result
 
     if not raw_stats:
         result['fetch_status'] = 'found/no stats'
@@ -728,15 +858,15 @@ PARK_LOOKUP = {
     'mariners':   ('T-Mobile Park', 'SUPPRESSOR'),
     't-mobile':   ('T-Mobile Park', 'SUPPRESSOR'),
     # Domes
-    'dodgers':    ('Dodger Stadium', 'DOME'),   # retractable roof
+    'dodgers':    ('Dodger Stadium', 'NEUTRAL'),  # retractable roof — fetch real weather
     'brewers':    ('American Family Field', 'DOME'),
     'american family': ('American Family Field', 'DOME'),
     'rays':       ('Tropicana Field', 'DOME'),
     'tropicana':  ('Tropicana Field', 'DOME'),
     'rangers':    ('Globe Life Field', 'DOME'),
     'globe life': ('Globe Life Field', 'DOME'),
-    'diamondbacks': ('Chase Field', 'DOME'),
-    'chase field': ('Chase Field', 'DOME'),
+    'diamondbacks': ('Chase Field', 'NEUTRAL'),  # retractable roof — fetch real weather
+    'chase field': ('Chase Field', 'NEUTRAL'),  # retractable roof
     # Neutral (all others get NEUTRAL if not matched)
     'nationals':  ('Nationals Park', 'NEUTRAL'),
     'nationals park': ('Nationals Park', 'NEUTRAL'),
@@ -1169,6 +1299,8 @@ def build_context_str(parsed, all_statcast):
 def run_job(jid, sid, raw_lineup, game_date=None):
     with store_lock:
         jobs[jid]['status'] = 'running'
+    # Clear leaderboard cache so every run gets fresh daily data
+    clear_leaderboard_cache()
     try:
         # S1
         step_set(jid, 1, 'active', 'Parsing lineup with Claude...')
@@ -1181,7 +1313,7 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         park_name = parsed.get('park_name', '?')
         park_cat  = parsed.get('park_category', 'NEUTRAL')
         step_set(jid, 2, 'active', f'Confirming park: {park_name} [{park_cat}] — fetching weather...')
-        weather = fetch_weather(park_name)
+        weather = fetch_weather(park_name, park_category=park_cat)
         temp_str = f"{weather['temp_f']}F" if weather['temp_f'] is not None else 'N/A'
         parsed['weather'] = weather
         with store_lock:
