@@ -262,6 +262,29 @@ def _load_batted_ball_cache():
         return []
 
 
+def _load_batter_batted_ball_cache():
+    """Pull full 2026 batter batted-ball leaderboard (FB%) once and cache."""
+    global _batter_batted_ball_cache
+    with _cache_lock:
+        if _batter_batted_ball_cache is not None:
+            return _batter_batted_ball_cache
+    url = (
+        f'https://baseballsavant.mlb.com/leaderboard/batted-ball'
+        f'?type=batter&year={CURRENT_YEAR}'
+    )
+    raw = savant_get(url, accept_json=True)
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        rows = data if isinstance(data, list) else data.get('data', [])
+        with _cache_lock:
+            _batter_batted_ball_cache = rows
+        return rows
+    except Exception:
+        return []
+
+
 def _load_arsenal_cache():
     """Pull full 2026 pitcher arsenal leaderboard (CSW%) once and cache."""
     global _arsenal_cache
@@ -2047,6 +2070,8 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 self._json({'error': 'Pass ?name=PlayerName'})
                 return
+            # Force load all caches fresh
+            clear_leaderboard_cache()
             rows = _load_leaderboard('batter')
             sc_rows = _load_statcast_cache()
             bb_rows = _load_batter_batted_ball_cache()
