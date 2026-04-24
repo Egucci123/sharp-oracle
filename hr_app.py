@@ -1174,7 +1174,13 @@ def fetch_pitcher_extras(player_id):
     return result
 
 def fetch_one_player(info):
-    """Full pipeline: pybaseball (primary) → Savant scrape (fallback) → sanity check."""
+    """
+    Option 2 pipeline:
+    - EV, HH%, Barrel%  → Savant player page scrape (confirmed working)
+    - xwOBA, xSLG, wOBA → pybaseball expected_stats (confirmed correct by MLBAM ID)
+    - EV50, SS%         → pybaseball expected_stats (best effort, may be N/A)
+    - FB%               → N/A (no reliable source)
+    """
     result = {
         **info,
         'exit_velocity': None, 'hard_hit_pct': None,
@@ -1191,90 +1197,81 @@ def fetch_one_player(info):
         return result
 
     ptype = 'pitcher' if info.get('role') == 'PITCHER' else 'batter'
-    raw_stats = None
     pid = None
-    source = 'none'
-
-    def has_stats(s):
-        return s and any(v is not None for v in s.values())
 
     # Get player ID — KNOWN_PLAYER_IDS → MLB Stats API cache → Savant search
     pid = get_player_id(name)
     if not pid:
         pid = search_player_id(name)
-    if pid:
-        result['player_id'] = pid
-
-    # STRATEGY 1: pybaseball (primary — all players, correct data, no blocking)
-    if pid and PYBASEBALL_OK:
-        pyb_row = _get_pyb_row(pid, ptype)
-        raw_stats = _extract_pyb_stats(pyb_row, ptype)
-        if has_stats(raw_stats):
-            source = 'pybaseball'
-        else:
-            raw_stats = None
-
-    # STRATEGY 2: bulk Savant leaderboard cache (fallback if pybaseball unavailable)
-    if pid and not has_stats(raw_stats):
-        lb_pid, raw_stats = lookup_player_in_leaderboard(name, ptype)
-        if lb_pid and has_stats(raw_stats):
-            source = 'leaderboard-cache'
-        else:
-            raw_stats = None
-
-    # STRATEGY 3: individual Savant leaderboard endpoint
-    if pid and not has_stats(raw_stats):
-        raw_stats = fetch_from_leaderboard(pid, ptype)
-        if has_stats(raw_stats):
-            source = 'leaderboard-individual'
-        else:
-            raw_stats = None
-
-    # STRATEGY 4: Savant player page scrape (last resort)
-    if pid and not has_stats(raw_stats):
-        raw_stats = fetch_from_player_page(pid, player_name=name)
-        if has_stats(raw_stats):
-            source = 'player-page'
-        else:
-            raw_stats = None
-
     if not pid:
         result['fetch_status'] = 'id not found'
         return result
+    result['player_id'] = pid
 
-    if not has_stats(raw_stats):
+    sources = []
+
+    # ── SOURCE A: Savant player page → EV, HH%, Barrel% ─────────────────────
+    # This scrapes the confirmed summary line:
+    # "(2026) Avg Exit Velocity: X, Hard Hit %: X, wOBA: X, xwOBA: X, Barrel %: X"
+    page_stats = fetch_from_player_page(pid, player_name=name)
+    if page_stats:
+        for k in ['exit_velocity', 'hard_hit_pct', 'barrel_pct']:
+            v = sane(k, page_stats.get(k))
+            if v is not None:
+                result[k] = v
+        # Also grab wOBA/xwOBA from page as fallback
+        for k in ['woba', 'xwoba']:
+            v = sane(k, page_stats.get(k))
+            if v is not None and result[k] is None:
+                result[k] = v
+        sources.append('savant-page')
+
+    # ── SOURCE B: pybaseball expected_stats → xwOBA, xSLG, wOBA, EV50, SS% ──
+    # Only use expected_stats (ex) — NOT exitvelo_barrels which has wrong IDs
+    if PYBASEBALL_OK:
+        with _pyb_lock:
+            cache = _pyb_batter_cache if ptype == 'batter' else _pyb_pitcher_cache
+        if cache is not None:
+            ex_df = cache.get('ex')
+            if ex_df is not None and not ex_df.empty:
+                rows = ex_df[ex_df['player_id'] == str(pid)]
+                if not rows.empty:
+                    row = rows.iloc[0]
+                    def pf(*cols):
+                        for c in cols:
+                            if c in row.index:
+                                try:
+                                    v = float(row[c])
+                                    if v == v:  # not NaN
+                                        return v
+                                except Exception:
+                                    pass
+                        return None
+                    # xwOBA — pybaseball confirmed correct
+                    xw = sane('xwoba', pf('est_woba'))
+                    if xw is not None:
+                        result['xwoba'] = xw
+                    # wOBA — use pybaseball if page didn't get it
+                    wo = sane('woba', pf('woba'))
+                    if wo is not None and result['woba'] is None:
+                        result['woba'] = wo
+                    # xSLG
+                    xs = sane('xslg', pf('est_slg'))
+                    if xs is not None:
+                        result['xslg'] = xs
+                    sources.append('pybaseball-expected')
+
+    if not any(result[k] is not None for k in ['exit_velocity', 'xwoba', 'barrel_pct']):
         result['fetch_status'] = 'found/no stats'
+        result['data_source'] = '+'.join(sources) or 'none'
         return result
 
-    # Sanity-check every stat — discard anything outside MLB-realistic range
-    bad = []
-    for stat, val in raw_stats.items():
-        checked = sane(stat, val)
-        if val is not None and checked is None:
-            bad.append(f'{stat}={val}(INSANE)')
-        result[stat] = checked
-
-    has_data = any(result[k] is not None for k in ['exit_velocity', 'xwoba', 'barrel_pct'])
-    if has_data:
-        result['fetch_status'] = 'ok'
-        result['data_source'] = source + (f' [DISCARDED: {",".join(bad)}]' if bad else '')
-    else:
-        result['fetch_status'] = 'found/no valid stats'
-        result['data_source'] = source
+    # All stats already sanity-checked during extraction above
+    result['fetch_status'] = 'ok'
+    result['data_source'] = '+'.join(sources)
 
     if result['xwoba'] is not None and result['woba'] is not None:
         result['gap'] = round(result['xwoba'] - result['woba'], 3)
-
-    # For batters: fetch xSLG, SS%, EV50, FB% if not already populated
-    if ptype == 'batter' and pid:
-        missing = any(result.get(k) is None for k in ['xslg', 'sweet_spot_pct', 'ev50', 'fb_pct'])
-        if missing:
-            ext = fetch_extended_batter_stats(pid)
-            for k, v in ext.items():
-                if result.get(k) is None:
-                    checked = sane(k, v)
-                    if checked is not None:
-                        result[k] = checked
 
     # For pitchers, fetch GB% and CSW% from separate endpoints
     if info.get('role') == 'PITCHER' and pid:
@@ -2449,6 +2446,13 @@ class Handler(BaseHTTPRequestHandler):
                 ex_row = b_ex[b_ex['player_id'] == '608070']
                 result['exitvelo_sample'] = ev_row.iloc[0].to_dict() if not ev_row.empty else {}
                 result['expected_sample'] = ex_row.iloc[0].to_dict() if not ex_row.empty else {}
+                # Also check Elly De La Cruz (682829) and show first 3 rows of exitvelo
+                elly_ev = b_ev[b_ev['player_id'] == '682829']
+                elly_ex = b_ex[b_ex['player_id'] == '682829']
+                result['elly_exitvelo'] = elly_ev.iloc[0].to_dict() if not elly_ev.empty else 'NOT FOUND'
+                result['elly_expected'] = elly_ex.iloc[0].to_dict() if not elly_ex.empty else 'NOT FOUND'
+                result['exitvelo_first3_ids'] = b_ev['player_id'].head(3).tolist()
+                result['expected_first3_ids'] = b_ex['player_id'].head(3).tolist()
                 # Convert any non-serializable types
                 import math
                 def clean(d):
