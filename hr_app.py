@@ -298,27 +298,30 @@ def _extract_pyb_stats(rows, player_type='batter'):
     ev = rows.get('ev')
     ex = rows.get('ex')
 
+    # CONFIRMED column names from pybaseball (verified via /api/pyb-debug):
+    # exitvelo_barrels: avg_hit_speed, ev50, anglesweetspotpercent, brl_percent,
+    #                   ev95percent (closest to HH%), fbld, gb
+    # expected_stats:   est_woba (=xwOBA), est_slg (=xSLG), woba
+
     if player_type == 'batter':
         return {
-            # From exitvelo_barrels
             'exit_velocity':  f(ev, 'avg_hit_speed'),
-            'hard_hit_pct':   f(ev, 'hard_hit_percent'),
-            'barrel_pct':     f(ev, 'brl_percent', 'brl_pa', 'barrel_batted_rate'),
-            # From expected_stats
-            'xwoba':          f(ex, 'xwoba', 'est_woba'),
-            'woba':           f(ex, 'woba') or f(ev, 'woba'),
-            'xslg':           f(ex, 'xslg', 'est_slg'),
-            'sweet_spot_pct': f(ex, 'sweet_spot_percent', 'la_sweet_spot_percent'),
-            'ev50':           f(ex, 'avg_best_speed', 'ev50'),
+            'hard_hit_pct':   f(ev, 'ev95percent'),       # balls hit 95mph+ %
+            'barrel_pct':     f(ev, 'brl_percent'),
+            'xwoba':          f(ex, 'est_woba'),
+            'woba':           f(ex, 'woba'),
+            'xslg':           f(ex, 'est_slg'),
+            'sweet_spot_pct': f(ev, 'anglesweetspotpercent'),
+            'ev50':           f(ev, 'ev50'),
             'fb_pct':         None,  # not in pybaseball
         }
     else:  # pitcher
         return {
             'exit_velocity':  f(ev, 'avg_hit_speed'),
-            'hard_hit_pct':   f(ev, 'hard_hit_percent'),
-            'barrel_pct':     f(ev, 'brl_percent', 'brl_pa', 'barrel_batted_rate'),
-            'xwoba':          f(ex, 'xwoba', 'est_woba'),
-            'woba':           f(ex, 'woba') or f(ev, 'woba'),
+            'hard_hit_pct':   f(ev, 'ev95percent'),
+            'barrel_pct':     f(ev, 'brl_percent'),
+            'xwoba':          f(ex, 'est_woba'),
+            'woba':           f(ex, 'woba'),
             'gb_pct':         None,  # Savant fallback
             'csw_pct':        None,  # Savant fallback
         }
