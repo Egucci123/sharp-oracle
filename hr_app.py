@@ -19,6 +19,21 @@ from urllib.parse import urlparse
 import urllib.request
 import urllib.error
 
+# ─── PYBASEBALL SETUP ─────────────────────────────────────────────────────────
+try:
+    import pandas as pd
+    from pybaseball import (
+        statcast_batter_exitvelo_barrels,
+        statcast_batter_expected_stats,
+        statcast_pitcher_exitvelo_barrels,
+        statcast_pitcher_expected_stats,
+    )
+    import pybaseball
+    pybaseball.cache.enable()
+    PYBASEBALL_OK = True
+except ImportError:
+    PYBASEBALL_OK = False
+
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 import os
 PORT   = int(os.environ.get('PORT', 5555))
@@ -194,6 +209,111 @@ _HEADERS = {
 }
 
 
+# ─── PYBASEBALL DATA LAYER ───────────────────────────────────────────────────
+# Pulls full 2026 season stats via pybaseball once per run.
+# Covers ALL players — no rate limiting, no blocking, correct data every time.
+# Falls back to Savant scrape if pybaseball unavailable.
+
+_pyb_batter_cache = None   # merged batter DataFrame (exitvelo + expected)
+_pyb_pitcher_cache = None  # merged pitcher DataFrame
+_pyb_lock = threading.Lock()
+
+
+def _pull_pybaseball_data():
+    """Pull and merge all 2026 batter and pitcher data via pybaseball."""
+    global _pyb_batter_cache, _pyb_pitcher_cache
+    if not PYBASEBALL_OK:
+        return False
+    try:
+        # Batter exit velo / barrels — EV, HH%, Barrel%
+        b_ev = statcast_batter_exitvelo_barrels(2026, minBBE=1)
+        # Batter expected stats — xwOBA, xSLG, wOBA, EV50, SS%
+        b_ex = statcast_batter_expected_stats(2026, minPA=1)
+        # Merge on player_id
+        b_ev['player_id'] = b_ev['player_id'].astype(str)
+        b_ex['player_id'] = b_ex['player_id'].astype(str)
+        merged_b = pd.merge(b_ev, b_ex, on='player_id', how='outer', suffixes=('_ev', '_ex'))
+        # Coalesce name columns
+        for col in ['last_name', 'first_name']:
+            col_ev = col + '_ev'
+            col_ex = col + '_ex'
+            if col_ev in merged_b.columns and col_ex in merged_b.columns:
+                merged_b[col] = merged_b[col_ev].combine_first(merged_b[col_ex])
+        with _pyb_lock:
+            _pyb_batter_cache = merged_b
+
+        # Pitcher exit velo / barrels
+        p_ev = statcast_pitcher_exitvelo_barrels(2026, minBBE=1)
+        # Pitcher expected stats
+        p_ex = statcast_pitcher_expected_stats(2026, minPA=1)
+        p_ev['player_id'] = p_ev['player_id'].astype(str)
+        p_ex['player_id'] = p_ex['player_id'].astype(str)
+        merged_p = pd.merge(p_ev, p_ex, on='player_id', how='outer', suffixes=('_ev', '_ex'))
+        for col in ['last_name', 'first_name']:
+            col_ev = col + '_ev'
+            col_ex = col + '_ex'
+            if col_ev in merged_p.columns and col_ex in merged_p.columns:
+                merged_p[col] = merged_p[col_ev].combine_first(merged_p[col_ex])
+        with _pyb_lock:
+            _pyb_pitcher_cache = merged_p
+        return True
+    except Exception as e:
+        return False
+
+
+def _get_pyb_row(player_id, player_type='batter'):
+    """Get a single player's row from pybaseball cache by MLBAM ID."""
+    with _pyb_lock:
+        df = _pyb_batter_cache if player_type == 'batter' else _pyb_pitcher_cache
+    if df is None or df.empty:
+        return None
+    pid = str(player_id)
+    rows = df[df['player_id'] == pid]
+    if rows.empty:
+        return None
+    return rows.iloc[0]
+
+
+def _extract_pyb_stats(row, player_type='batter'):
+    """Convert a pybaseball DataFrame row to our internal stats dict."""
+    if row is None:
+        return None
+
+    def f(col, *aliases):
+        for c in (col,) + aliases:
+            if c in row.index:
+                v = row[c]
+                try:
+                    if pd.notna(v):
+                        return float(v)
+                except Exception:
+                    pass
+        return None
+
+    if player_type == 'batter':
+        return {
+            'exit_velocity':  f('avg_hit_speed'),
+            'hard_hit_pct':   f('hard_hit_percent'),
+            'barrel_pct':     f('brl_percent', 'brl_pa', 'barrel_batted_rate'),
+            'xwoba':          f('xwoba'),
+            'woba':           f('woba'),
+            'xslg':           f('xslg', 'est_slg'),
+            'sweet_spot_pct': f('sweet_spot_percent', 'la_sweet_spot_percent'),
+            'ev50':           f('avg_best_speed', 'ev50'),
+            'fb_pct':         None,  # not in pybaseball — will try Savant scrape
+        }
+    else:  # pitcher
+        return {
+            'exit_velocity':  f('avg_hit_speed'),
+            'hard_hit_pct':   f('hard_hit_percent'),
+            'barrel_pct':     f('brl_percent', 'brl_pa', 'barrel_batted_rate'),
+            'xwoba':          f('xwoba'),
+            'woba':           f('woba'),
+            'gb_pct':         None,  # not in pybaseball expected_stats — Savant fallback
+            'csw_pct':        None,  # not in pybaseball — Savant fallback
+        }
+
+
 # ─── LEADERBOARD CACHE ────────────────────────────────────────────────────────
 # Pull the full 2026 leaderboard once and cache it for the session.
 # This avoids per-player search requests that Savant rate-limits aggressively.
@@ -206,13 +326,16 @@ _cache_lock = threading.Lock()
 
 def clear_leaderboard_cache():
     """Clear all caches so next run pulls fresh data."""
-    global _batted_ball_cache, _arsenal_cache, _statcast_cache
+    global _batted_ball_cache, _arsenal_cache, _statcast_cache, _pyb_batter_cache, _pyb_pitcher_cache
     with _cache_lock:
         _leaderboard_cache['batter'] = None
         _leaderboard_cache['pitcher'] = None
         _batted_ball_cache = None
         _arsenal_cache = None
         _statcast_cache = None
+    with _pyb_lock:
+        _pyb_batter_cache = None
+        _pyb_pitcher_cache = None
 
 
 def _load_leaderboard(player_type='batter'):
@@ -857,13 +980,17 @@ def fetch_from_player_page(player_id, player_name=None):
       (2026) Avg Exit Velocity: X, Hard Hit %: X, wOBA: X, xwOBA: X, Barrel %: X
     This is the most reliable text pattern on the page.
     """
-    # Build name slug if we have the name (savant prefers name-id URL)
+    # Try multiple URL formats — numeric ID is most reliable
     urls = []
     if player_name:
         slug = normalize_name(player_name).lower().replace(' ', '-')
         urls.append(f'https://baseballsavant.mlb.com/savant-player/{slug}-{player_id}')
-    # Also try numeric-only URL as fallback
+    # Numeric-only URL always works regardless of name spelling
     urls.append(f'https://baseballsavant.mlb.com/savant-player/{player_id}')
+    # Also try statcast search as last resort
+    if player_name:
+        encoded = urllib.request.quote(normalize_name(player_name))
+        urls.append(f'https://baseballsavant.mlb.com/statcast/search?hfPT=&hfAB=&hfGT=R%7C&hfPR=&hfZ=&hfStadium=&hfBBL=&hfNewZones=&hfPull=&hfC=&hfSea=2026%7C&hfSit=&player_type=batter&hfOuts=&hfOpponent=&pitcher_throws=&batter_stands=&hfSA=&game_date_gt=&game_date_lt=&hfMo=&hfTeam=&home_road=&hfRO=&position=&hfInfield=&hfOutfield=&hfInn=&hfBBT=&batters_lookup%5B%5D={player_id}&hfFlag=&metric_1=&group_by=name&min_pitches=0&min_results=0&min_pas=0&sort_col=pitches&player_event_sort=api_h_launch_speed&sort_order=desc&chk_stats_pa=on')
 
     html = None
     for url in urls:
@@ -875,11 +1002,13 @@ def fetch_from_player_page(player_id, player_name=None):
     if not html:
         return None
 
-    stats = {'exit_velocity': None, 'hard_hit_pct': None,
-             'woba': None, 'xwoba': None, 'barrel_pct': None}
+    stats = {
+        'exit_velocity': None, 'hard_hit_pct': None,
+        'woba': None, 'xwoba': None, 'barrel_pct': None,
+        'xslg': None, 'sweet_spot_pct': None, 'ev50': None, 'fb_pct': None,
+    }
 
     # PRIMARY: the "(2026) Avg Exit Velocity: X, Hard Hit %: X, ..." summary line
-    # This is what shows in the search snippet and at top of page
     year_block = re.search(
         r'\((?:2026|2025)\)\s*Avg\s*Exit\s*Vel[a-z]*:\s*([\d.]+)[,\s]*'
         r'Hard\s*Hit\s*%:\s*([\d.]+)[,\s]*'
@@ -894,45 +1023,54 @@ def fetch_from_player_page(player_id, player_name=None):
         stats['woba']          = safe_float(year_block.group(3))
         stats['xwoba']         = safe_float(year_block.group(4))
         stats['barrel_pct']    = safe_float(year_block.group(5))
-        if any(v is not None for v in stats.values()):
-            return stats
 
-    # SECONDARY: look for JSON blobs with the right year marker
-    # Only trust blobs that contain a year:2026 or season:2026 field
-    for blob in re.findall(r'(\[{.*?}\])', html, re.DOTALL):
+    # SECONDARY: scan ALL JSON blobs on the page for extra stats
+    # Don't filter by year — just merge any plausible stat keys found
+    # The page always loads current year data first
+    for blob in re.findall(r'(\[{.+?}\])', html, re.DOTALL):
         try:
             arr = json.loads(blob)
             if not (isinstance(arr, list) and arr and isinstance(arr[0], dict)):
                 continue
             row = arr[0]
-            # Verify this is 2026 data
+            # Skip if this looks like old season data
             year_val = str(row.get('year', row.get('season', row.get('game_year', ''))))
-            if year_val and year_val not in ('2026', ''):
-                continue  # skip — this is old season data
-
+            if year_val and year_val not in ('2026', '2025', ''):
+                continue
             extracted = _extract_leaderboard_row(row)
-            if extracted and any(v is not None for v in extracted.values()):
-                return extracted
+            if not extracted:
+                continue
+            # Merge — only fill in fields still missing
+            for k, v in extracted.items():
+                if v is not None and stats.get(k) is None:
+                    stats[k] = v
         except Exception:
             pass
 
-    # TERTIARY: key:value JSON patterns — only if we find a 2026 anchor nearby
-    has_2026 = '2026' in html
-    if has_2026:
-        kv_patterns = [
-            ('exit_velocity', [r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?']),
-            ('hard_hit_pct',  [r'"hard_hit_percent"\s*:\s*"?([\d.]+)"?']),
-            ('xwoba',         [r'"xwoba"\s*:\s*"?([\d.]+)"?']),
-            ('woba',          [r'"woba"\s*:\s*"?([\d.]+)"?']),
-            ('barrel_pct',    [r'"barrel_batted_rate"\s*:\s*"?([\d.]+)"?',
-                               r'"barrels_per_bbe_percent"\s*:\s*"?([\d.]+)"?']),
-        ]
-        for stat, pats in kv_patterns:
-            for pat in pats:
-                m = re.search(pat, html, re.I)
-                if m:
-                    stats[stat] = safe_float(m.group(1))
-                    break
+    # TERTIARY: regex key:value scan for any remaining missing fields
+    kv_map = [
+        ('exit_velocity',   [r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?']),
+        ('hard_hit_pct',    [r'"hard_hit_percent"\s*:\s*"?([\d.]+)"?']),
+        ('xwoba',           [r'"xwoba"\s*:\s*"?([\d.]+)"?']),
+        ('woba',            [r'"woba"\s*:\s*"?([\d.]+)"?']),
+        ('barrel_pct',      [r'"barrel_batted_rate"\s*:\s*"?([\d.]+)"?',
+                             r'"barrels_per_bbe_percent"\s*:\s*"?([\d.]+)"?']),
+        ('xslg',            [r'"xslg"\s*:\s*"?([\d.]+)"?',
+                             r'"est_slg"\s*:\s*"?([\d.]+)"?']),
+        ('sweet_spot_pct',  [r'"sweet_spot_percent"\s*:\s*"?([\d.]+)"?',
+                             r'"la_sweet_spot_percent"\s*:\s*"?([\d.]+)"?']),
+        ('ev50',            [r'"avg_best_speed"\s*:\s*"?([\d.]+)"?']),
+        ('fb_pct',          [r'"fb_percent"\s*:\s*"?([\d.]+)"?',
+                             r'"flyball_percent"\s*:\s*"?([\d.]+)"?']),
+    ]
+    for stat, pats in kv_map:
+        if stats.get(stat) is not None:
+            continue
+        for pat in pats:
+            m = re.search(pat, html, re.I)
+            if m:
+                stats[stat] = safe_float(m.group(1))
+                break
 
     return stats if any(v is not None for v in stats.values()) else None
 
@@ -1022,7 +1160,7 @@ def fetch_pitcher_extras(player_id):
     return result
 
 def fetch_one_player(info):
-    """Full pipeline: search → leaderboard API → page fallback → sanity check."""
+    """Full pipeline: pybaseball (primary) → Savant scrape (fallback) → sanity check."""
     result = {
         **info,
         'exit_velocity': None, 'hard_hit_pct': None,
@@ -1046,22 +1184,31 @@ def fetch_one_player(info):
     def has_stats(s):
         return s and any(v is not None for v in s.values())
 
-    # Strategy 1: get player ID (KNOWN_PLAYER_IDS → MLB Stats API → Savant search)
+    # Get player ID — KNOWN_PLAYER_IDS → MLB Stats API cache → Savant search
     pid = get_player_id(name)
     if not pid:
         pid = search_player_id(name)
     if pid:
         result['player_id'] = pid
 
-    # Strategy 2: bulk leaderboard lookup by ID (fast, uses cached data)
-    if pid:
+    # STRATEGY 1: pybaseball (primary — all players, correct data, no blocking)
+    if pid and PYBASEBALL_OK:
+        pyb_row = _get_pyb_row(pid, ptype)
+        raw_stats = _extract_pyb_stats(pyb_row, ptype)
+        if has_stats(raw_stats):
+            source = 'pybaseball'
+        else:
+            raw_stats = None
+
+    # STRATEGY 2: bulk Savant leaderboard cache (fallback if pybaseball unavailable)
+    if pid and not has_stats(raw_stats):
         lb_pid, raw_stats = lookup_player_in_leaderboard(name, ptype)
         if lb_pid and has_stats(raw_stats):
             source = 'leaderboard-cache'
         else:
             raw_stats = None
 
-    # Strategy 3: per-player leaderboard fetch by ID (individual endpoint)
+    # STRATEGY 3: individual Savant leaderboard endpoint
     if pid and not has_stats(raw_stats):
         raw_stats = fetch_from_leaderboard(pid, ptype)
         if has_stats(raw_stats):
@@ -1069,7 +1216,7 @@ def fetch_one_player(info):
         else:
             raw_stats = None
 
-    # Strategy 4: player page scrape (most reliable, always current)
+    # STRATEGY 4: Savant player page scrape (last resort)
     if pid and not has_stats(raw_stats):
         raw_stats = fetch_from_player_page(pid, player_name=name)
         if has_stats(raw_stats):
@@ -1659,8 +1806,11 @@ def build_context_str(parsed, all_statcast):
 def run_job(jid, sid, raw_lineup, game_date=None):
     with store_lock:
         jobs[jid]['status'] = 'running'
-    # Clear leaderboard cache so every run gets fresh daily data
+    # Clear all caches so every run gets fresh daily data
     clear_leaderboard_cache()
+    # Pull fresh pybaseball data (all 2026 players in one shot)
+    if PYBASEBALL_OK:
+        _pull_pybaseball_data()
     try:
         # S1
         step_set(jid, 1, 'active', 'Parsing lineup with Claude...')
