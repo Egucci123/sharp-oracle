@@ -849,14 +849,29 @@ def _extract_leaderboard_row(row):
     }
 
 
-def fetch_from_player_page(player_id):
+def fetch_from_player_page(player_id, player_name=None):
     """
     Fallback: scrape the savant player page.
+    Tries name-slug URL first, then numeric ID URL.
     Looks for the stat summary line that Savant displays at the top:
       (2026) Avg Exit Velocity: X, Hard Hit %: X, wOBA: X, xwOBA: X, Barrel %: X
     This is the most reliable text pattern on the page.
     """
-    html = savant_get(f'https://baseballsavant.mlb.com/savant-player/{player_id}')
+    # Build name slug if we have the name (savant prefers name-id URL)
+    urls = []
+    if player_name:
+        slug = normalize_name(player_name).lower().replace(' ', '-')
+        urls.append(f'https://baseballsavant.mlb.com/savant-player/{slug}-{player_id}')
+    # Also try numeric-only URL as fallback
+    urls.append(f'https://baseballsavant.mlb.com/savant-player/{player_id}')
+
+    html = None
+    for url in urls:
+        html = savant_get(url)
+        if html:
+            break
+    if not html:
+        return None
     if not html:
         return None
 
@@ -975,33 +990,49 @@ def fetch_one_player(info):
         return result
 
     ptype = 'pitcher' if info.get('role') == 'PITCHER' else 'batter'
-
-    # Strategy 1: Full leaderboard name match (avoids per-player search rate limits)
-    lb_pid, raw_stats = lookup_player_in_leaderboard(name, ptype)
-    source = 'leaderboard-cache'
+    raw_stats = None
     pid = None
+    source = 'none'
 
-    if lb_pid:
-        result['player_id'] = lb_pid
-        pid = lb_pid
-    else:
-        # Strategy 2: Per-player search fallback
+    def has_stats(s):
+        return s and any(v is not None for v in s.values())
+
+    # Strategy 1: get player ID (KNOWN_PLAYER_IDS → MLB Stats API → Savant search)
+    pid = get_player_id(name)
+    if not pid:
         pid = search_player_id(name)
-        if pid:
-            result['player_id'] = pid
-            raw_stats = fetch_from_leaderboard(pid, ptype)
-            source = 'leaderboard'
+    if pid:
+        result['player_id'] = pid
 
-    # Strategy 3: Player page fallback
-    if not raw_stats or not any(v is not None for v in (raw_stats or {}).values()):
-        if pid:
-            raw_stats = fetch_from_player_page(pid)
+    # Strategy 2: bulk leaderboard lookup by ID (fast, uses cached data)
+    if pid:
+        lb_pid, raw_stats = lookup_player_in_leaderboard(name, ptype)
+        if lb_pid and has_stats(raw_stats):
+            source = 'leaderboard-cache'
+        else:
+            raw_stats = None
+
+    # Strategy 3: per-player leaderboard fetch by ID (individual endpoint)
+    if pid and not has_stats(raw_stats):
+        raw_stats = fetch_from_leaderboard(pid, ptype)
+        if has_stats(raw_stats):
+            source = 'leaderboard-individual'
+        else:
+            raw_stats = None
+
+    # Strategy 4: player page scrape (most reliable, always current)
+    if pid and not has_stats(raw_stats):
+        raw_stats = fetch_from_player_page(pid, player_name=name)
+        if has_stats(raw_stats):
             source = 'player-page'
         else:
-            result['fetch_status'] = 'id not found'
-            return result
+            raw_stats = None
 
-    if not raw_stats:
+    if not pid:
+        result['fetch_status'] = 'id not found'
+        return result
+
+    if not has_stats(raw_stats):
         result['fetch_status'] = 'found/no stats'
         return result
 
