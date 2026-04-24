@@ -2426,6 +2426,46 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == '/api/rules':
             self._json({'rules': LOCKED_RULES})
+        elif path == '/api/pyb-debug':
+            # Dumps actual pybaseball column names and a sample row
+            # Hit this ONCE after deploy to see exact field names
+            try:
+                if not PYBASEBALL_OK:
+                    self._json({'error': 'pybaseball not available'})
+                    return
+                result = {}
+                # Pull fresh
+                b_ev = statcast_batter_exitvelo_barrels(2026, minBBE=1)
+                b_ex = statcast_batter_expected_stats(2026, minPA=1)
+                result['exitvelo_cols'] = list(b_ev.columns)
+                result['expected_cols'] = list(b_ex.columns)
+                # Sample: Jose Ramirez (608070)
+                b_ev['player_id'] = b_ev['player_id'].astype(str)
+                b_ex['player_id'] = b_ex['player_id'].astype(str)
+                ev_row = b_ev[b_ev['player_id'] == '608070']
+                ex_row = b_ex[b_ex['player_id'] == '608070']
+                result['exitvelo_sample'] = ev_row.iloc[0].to_dict() if not ev_row.empty else {}
+                result['expected_sample'] = ex_row.iloc[0].to_dict() if not ex_row.empty else {}
+                # Convert any non-serializable types
+                import math
+                def clean(d):
+                    out = {}
+                    for k,v in d.items():
+                        try:
+                            if v is None or (isinstance(v, float) and math.isnan(v)):
+                                out[k] = None
+                            else:
+                                out[k] = float(v) if hasattr(v,'__float__') else str(v)
+                        except:
+                            out[k] = str(v)
+                    return out
+                result['exitvelo_sample'] = clean(result['exitvelo_sample'])
+                result['expected_sample'] = clean(result['expected_sample'])
+                self._json(result)
+            except Exception as ex:
+                import traceback
+                self._json({'error': str(ex), 'trace': traceback.format_exc()})
+
         elif path == '/api/debug':
             try:
                 from urllib.parse import parse_qs
