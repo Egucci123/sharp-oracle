@@ -27,6 +27,7 @@ try:
         statcast_batter_expected_stats,
         statcast_pitcher_exitvelo_barrels,
         statcast_pitcher_expected_stats,
+        playerid_lookup,
     )
     import pybaseball
     pybaseball.cache.enable()
@@ -516,8 +517,8 @@ KNOWN_PLAYER_IDS = {
     'elly de la cruz': '682829',   # confirmed from savant URL
     'ke bryan hayes': '663647',
     "ke'bryan hayes": '663647',
-    'sal stewart': '694192',
-    'dillon dingler': '681584',
+    'sal stewart': '701398',   # confirmed from savant URL
+    'dillon dingler': '693307',   # confirmed from savant URL
     'tyler stephenson': '661397',
     'eugenio suarez': '553993',
     'eugenio suárez': '553993',
@@ -539,6 +540,52 @@ KNOWN_PLAYER_IDS = {
     'wenceel perez': '676080',
     'wenceel pérez': '676080',
     'jahmai jones': '663330',
+    # ── VERIFIED FROM SAVANT URLS 2026-04-24 ─────────────────────────────────
+    # Confirmed from baseballsavant.mlb.com/savant-player/name-ID URLs
+    'royce lewis': '668904',        # savant-player/royce-lewis-668904
+    'jonny deluca': '676356',       # savant-player/jonny-deluca-676356
+    'victor caratini': '605170',    # savant-player/victor-caratini-605170
+    'trevor larnach': '663616',     # savant-player/trevor-larnach-663616
+    'cedric mullins': '656775',     # savant-player/cedric-mullins-656775
+    'matt wallner': '670242',       # savant-player/matt-wallner-670242
+    'jonathan aranda': '666018',    # savant-player/jonathan-aranda-666018
+    'yandy diaz': '650490',         # savant-player/yandy-diaz-650490
+    'yandy díaz': '650490',
+    'brooks lee': '686797',         # savant-player/brooks-lee-686797
+    'drew rasmussen': '656876',     # savant-player/drew-rasmussen-656876
+    'taj bradley': '671737',        # savant-player/taj-bradley-671737
+    'byron buxton': '621439',       # savant-player/byron-buxton-621439
+    'junior caminero': '691406',    # savant-player/junior-caminero-691406
+    'brayan bello': '678394',       # savant-player/brayan-bello-678394
+    'adley rutschman': '668939',    # savant-player/adley-rutschman-668939
+    'wilyer abreu': '677800',       # savant-player/wilyer-abreu-677800
+    'pete alonso': '624413',        # savant-player/pete-alonso-624413
+    'masataka yoshida': '807799',   # savant-player/masataka-yoshida-807799
+    'jarren duran': '680776',       # savant-player/jarren-duran-680776
+    'ceddanne rafaela': '678882',   # savant-player/ceddanne-rafaela-678882
+    'junior caminero': '691406',    # savant-player/junior-caminero-691406
+    'gunnar henderson': '683002',   # savant-player/gunnar-henderson-683002
+    'taylor ward': '621493',        # savant-player/taylor-ward-621493
+    'leody taveras': '665750',      # savant-player/leody-taveras-665750
+    'gavin williams': '668909',     # savant-player/gavin-williams-668909
+    'max scherzer': '453286',       # savant-player/max-scherzer-453286
+    'andres gimenez': '665926',     # savant-player/andres-gimenez-665926
+    'andrés giménez': '665926',
+    'vladimir guerrero jr': '665489',  # savant-player/vladimir-guerrero-jr-665489
+    'vladimir guerrero jr.': '665489',
+    'chase delauter': '800050',     # savant-player/chase-delauter-800050
+    'jesus sanchez': '660821',      # savant-player/jesus-sanchez-660821
+    'jesús sánchez': '660821',
+    'bo naylor': '666310',          # savant-player/bo-naylor-666310
+    'bo naylor': '666310',
+    'josh naylor': '647304',        # savant-player/josh-naylor-647304
+    'rhys hoskins': '543333',       # savant-player/rhys-hoskins-543333
+    'willson contreras': '575929',  # savant-player/willson-contreras-575929 (BOS)
+    'jonathan aranda': '666018',    # savant-player/jonathan-aranda-666018
+    'taylor walls': '657757',       # confirmed from Baseball Cube
+    'royce lewis': '668904',
+    'trevor story': '596115',       # long-tenured player
+    'pete alonso': '624413',
 }
 
 
@@ -589,24 +636,46 @@ def _load_mlb_player_cache():
 
 def get_player_id(name):
     """Return MLBAM/Savant player ID for a name.
-    Priority: KNOWN_PLAYER_IDS (hardcoded) → MLB Stats API cache → None.
+    Priority: KNOWN_PLAYER_IDS → pybaseball playerid_lookup → MLB Stats API cache.
     """
     key = normalize_name(name).lower()
-    # 1. Hardcoded fallbacks
+
+    # 1. Hardcoded overrides (highest confidence, corrected IDs)
     if key in KNOWN_PLAYER_IDS:
         return KNOWN_PLAYER_IDS[key]
-    # 2. Full MLB cache
+
+    # 2. pybaseball playerid_lookup — covers every MLB player by name
+    if PYBASEBALL_OK:
+        try:
+            parts = key.split()
+            if len(parts) >= 2:
+                last = parts[-1]
+                first = parts[0]
+                result = playerid_lookup(last, first)
+                if result is not None and not result.empty:
+                    # Filter to players who actually played in MLB
+                    played = result[result['mlb_played_first'].notna()]
+                    if played.empty:
+                        played = result
+                    # Pick most recent player if multiple
+                    pid = str(int(played.sort_values('mlb_played_last', ascending=False).iloc[0]['key_mlbam']))
+                    if pid and pid != 'nan':
+                        return pid
+        except Exception:
+            pass
+
+    # 3. MLB Stats API cache fallback
     cache = _load_mlb_player_cache()
     pid = cache.get(key)
     if pid:
         return pid
-    # 3. Partial match — first + last only
     parts = key.split()
     if len(parts) >= 2:
         short = f'{parts[0]} {parts[-1]}'
         pid = cache.get(short)
         if pid:
             return pid
+
     return None
 
 
@@ -2448,6 +2517,12 @@ class Handler(BaseHTTPRequestHandler):
                 result['elly_expected'] = elly_ex.iloc[0].to_dict() if not elly_ex.empty else 'NOT FOUND'
                 result['exitvelo_first3_ids'] = b_ev['player_id'].head(3).tolist()
                 result['expected_first3_ids'] = b_ex['player_id'].head(3).tolist()
+                # Check Myers (667472) and Jones (663330) specifically
+                for test_pid, test_name in [('667472','Dane Myers'),('663330','Jahmai Jones')]:
+                    ev_r = b_ev[b_ev['player_id'] == test_pid]
+                    ex_r = b_ex[b_ex['player_id'] == test_pid]
+                    result[f'{test_name}_ev'] = ev_r.iloc[0].to_dict() if not ev_r.empty else 'NOT FOUND'
+                    result[f'{test_name}_ex'] = ex_r.iloc[0].to_dict() if not ex_r.empty else 'NOT FOUND'
                 # Convert any non-serializable types
                 import math
                 def clean(d):
@@ -2469,26 +2544,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({'error': str(ex), 'trace': traceback.format_exc()})
 
         elif path == '/api/id-test':
-            # Tests whether MLB Stats API cache is returning player IDs correctly
             try:
                 from urllib.parse import parse_qs
                 qs = parse_qs(urlparse(self.path).query)
                 name = qs.get('name', ['Elly De La Cruz'])[0]
-                # Force reload
-                _clear_mlb_cache()
-                cache = _load_mlb_player_cache()
-                key = normalize_name(name).lower()
-                pid_cache = cache.get(key)
-                pid_known = KNOWN_PLAYER_IDS.get(key)
                 pid_final = get_player_id(name)
+                # Also test a few known players
+                tests = {
+                    'Elly De La Cruz': ('682829', get_player_id('Elly De La Cruz')),
+                    'Jahmai Jones':    ('663330', get_player_id('Jahmai Jones')),
+                    'Dane Myers':      ('667472', get_player_id('Dane Myers')),
+                    'Spencer Steer':   ('668715', get_player_id('Spencer Steer')),
+                    name:              ('?',      pid_final),
+                }
                 self._json({
-                    'name': name,
-                    'normalized_key': key,
-                    'mlb_api_cache_size': len(cache),
-                    'pid_from_mlb_api': pid_cache,
-                    'pid_from_known_ids': pid_known,
-                    'pid_final': pid_final,
-                    'sample_cache_keys': list(cache.keys())[:10],
+                    'pybaseball_ok': PYBASEBALL_OK,
+                    'requested': {'name': name, 'pid': pid_final},
+                    'known_player_tests': {k: {'expected': v[0], 'got': v[1], 'match': v[0]==v[1] or v[0]=='?'} for k,v in tests.items()},
                 })
             except Exception as ex:
                 import traceback
