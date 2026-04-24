@@ -513,7 +513,7 @@ KNOWN_PLAYER_IDS = {
     'jahmai jones': '663330',
     'spencer steer': '668715',
     # Common players with name collision risk
-    'elly de la cruz': '682998',
+    'elly de la cruz': '682829',   # confirmed from savant URL
     'ke bryan hayes': '663647',
     "ke'bryan hayes": '663647',
     'sal stewart': '694192',
@@ -994,17 +994,12 @@ def fetch_from_player_page(player_id, player_name=None):
       (2026) Avg Exit Velocity: X, Hard Hit %: X, wOBA: X, xwOBA: X, Barrel %: X
     This is the most reliable text pattern on the page.
     """
-    # Try multiple URL formats — numeric ID is most reliable
-    urls = []
-    if player_name:
-        slug = normalize_name(player_name).lower().replace(' ', '-')
-        urls.append(f'https://baseballsavant.mlb.com/savant-player/{slug}-{player_id}')
-    # Numeric-only URL always works regardless of name spelling
-    urls.append(f'https://baseballsavant.mlb.com/savant-player/{player_id}')
-    # Also try statcast search as last resort
-    if player_name:
-        encoded = urllib.request.quote(normalize_name(player_name))
-        urls.append(f'https://baseballsavant.mlb.com/statcast/search?hfPT=&hfAB=&hfGT=R%7C&hfPR=&hfZ=&hfStadium=&hfBBL=&hfNewZones=&hfPull=&hfC=&hfSea=2026%7C&hfSit=&player_type=batter&hfOuts=&hfOpponent=&pitcher_throws=&batter_stands=&hfSA=&game_date_gt=&game_date_lt=&hfMo=&hfTeam=&home_road=&hfRO=&position=&hfInfield=&hfOutfield=&hfInn=&hfBBT=&batters_lookup%5B%5D={player_id}&hfFlag=&metric_1=&group_by=name&min_pitches=0&min_results=0&min_pas=0&sort_col=pitches&player_event_sort=api_h_launch_speed&sort_order=desc&chk_stats_pa=on')
+    # Use numeric ID only — slug URLs can resolve to wrong cached pages
+    # Also try the stats=statcast URL which forces the statcast summary line
+    urls = [
+        f'https://baseballsavant.mlb.com/savant-player/{player_id}?stats=statcast-r-hitting-mlb&season={CURRENT_YEAR}',
+        f'https://baseballsavant.mlb.com/savant-player/{player_id}',
+    ]
 
     html = None
     for url in urls:
@@ -1024,7 +1019,7 @@ def fetch_from_player_page(player_id, player_name=None):
 
     # PRIMARY: the "(2026) Avg Exit Velocity: X, Hard Hit %: X, ..." summary line
     year_block = re.search(
-        r'\((?:2026|2025)\)\s*Avg\s*Exit\s*Vel[a-z]*:\s*([\d.]+)[,\s]*'
+        r'\(2026\)\s*Avg\s*Exit\s*Vel[a-z]*:\s*([\d.]+)[,\s]*'
         r'Hard\s*Hit\s*%:\s*([\d.]+)[,\s]*'
         r'wOBA:\s*([.\d]+)[,\s]*'
         r'xwOBA:\s*([.\d]+)[,\s]*'
@@ -1049,7 +1044,7 @@ def fetch_from_player_page(player_id, player_name=None):
             row = arr[0]
             # Skip if this looks like old season data
             year_val = str(row.get('year', row.get('season', row.get('game_year', ''))))
-            if year_val and year_val not in ('2026', '2025', ''):
+            if year_val and year_val not in ('2026', ''):
                 continue
             extracted = _extract_leaderboard_row(row)
             if not extracted:
@@ -2469,6 +2464,32 @@ class Handler(BaseHTTPRequestHandler):
                 result['exitvelo_sample'] = clean(result['exitvelo_sample'])
                 result['expected_sample'] = clean(result['expected_sample'])
                 self._json(result)
+            except Exception as ex:
+                import traceback
+                self._json({'error': str(ex), 'trace': traceback.format_exc()})
+
+        elif path == '/api/id-test':
+            # Tests whether MLB Stats API cache is returning player IDs correctly
+            try:
+                from urllib.parse import parse_qs
+                qs = parse_qs(urlparse(self.path).query)
+                name = qs.get('name', ['Elly De La Cruz'])[0]
+                # Force reload
+                _clear_mlb_cache()
+                cache = _load_mlb_player_cache()
+                key = normalize_name(name).lower()
+                pid_cache = cache.get(key)
+                pid_known = KNOWN_PLAYER_IDS.get(key)
+                pid_final = get_player_id(name)
+                self._json({
+                    'name': name,
+                    'normalized_key': key,
+                    'mlb_api_cache_size': len(cache),
+                    'pid_from_mlb_api': pid_cache,
+                    'pid_from_known_ids': pid_known,
+                    'pid_final': pid_final,
+                    'sample_cache_keys': list(cache.keys())[:10],
+                })
             except Exception as ex:
                 import traceback
                 self._json({'error': str(ex), 'trace': traceback.format_exc()})
