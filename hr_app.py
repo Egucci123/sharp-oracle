@@ -938,6 +938,55 @@ def fetch_from_player_page(player_id, player_name=None):
 
 
 
+def fetch_extended_batter_stats(player_id):
+    """
+    Fetch xSLG, SS%, EV50, FB% for a batter via individual Savant endpoints.
+    Called when bulk leaderboard is blocked — uses per-player API calls.
+    """
+    result = {'xslg': None, 'sweet_spot_pct': None, 'ev50': None, 'fb_pct': None}
+
+    def g(row, *keys):
+        for k in keys:
+            v = row.get(k)
+            if v not in (None, '', 'null', 'None'):
+                f = safe_float(v)
+                if f is not None:
+                    return f
+        return None
+
+    # xSLG + SS% + EV50 from expected_statistics individual endpoint
+    url = (f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
+           f'?type=batter&year={CURRENT_YEAR}&player_id={player_id}&min=0')
+    raw = savant_get(url, accept_json=True)
+    if raw:
+        try:
+            data = json.loads(raw)
+            rows = data if isinstance(data, list) else data.get('data', [])
+            if rows:
+                row = rows[0]
+                result['xslg']          = g(row, 'xslg', 'est_slg', 'est_slugging')
+                result['sweet_spot_pct']= g(row, 'sweet_spot_percent', 'la_sweet_spot_percent', 'sweet_spot_pct')
+                result['ev50']          = g(row, 'avg_best_speed', 'ev50', 'ev_50')
+        except Exception:
+            pass
+
+    # FB% from batted-ball individual endpoint
+    url2 = (f'https://baseballsavant.mlb.com/leaderboard/batted-ball'
+            f'?type=batter&year={CURRENT_YEAR}&player_id={player_id}')
+    raw2 = savant_get(url2, accept_json=True)
+    if raw2:
+        try:
+            data2 = json.loads(raw2)
+            rows2 = data2 if isinstance(data2, list) else data2.get('data', [])
+            if rows2:
+                row2 = rows2[0]
+                result['fb_pct'] = g(row2, 'fb_percent', 'flyball_percent', 'fly_ball_percent', 'fb_pct')
+        except Exception:
+            pass
+
+    return result
+
+
 def fetch_pitcher_extras(player_id):
     """
     Fetch GB% and CSW% for pitchers using cached full leaderboards.
@@ -1054,6 +1103,17 @@ def fetch_one_player(info):
 
     if result['xwoba'] is not None and result['woba'] is not None:
         result['gap'] = round(result['xwoba'] - result['woba'], 3)
+
+    # For batters: fetch xSLG, SS%, EV50, FB% if not already populated
+    if ptype == 'batter' and pid:
+        missing = any(result.get(k) is None for k in ['xslg', 'sweet_spot_pct', 'ev50', 'fb_pct'])
+        if missing:
+            ext = fetch_extended_batter_stats(pid)
+            for k, v in ext.items():
+                if result.get(k) is None:
+                    checked = sane(k, v)
+                    if checked is not None:
+                        result[k] = checked
 
     # For pitchers, fetch GB% and CSW% from separate endpoints
     if info.get('role') == 'PITCHER' and pid:
