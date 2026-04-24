@@ -225,39 +225,57 @@ def _pull_pybaseball_data():
     if not PYBASEBALL_OK:
         return False
     try:
-        # Batter exit velo / barrels — EV, HH%, Barrel%
+        # ── BATTERS ──────────────────────────────────────────────────────────
+        # exitvelo_barrels: player_id, last_name, first_name, avg_hit_speed,
+        #                   hard_hit_percent, brl_percent, brl_pa
         b_ev = statcast_batter_exitvelo_barrels(2026, minBBE=1)
-        # Batter expected stats — xwOBA, xSLG, wOBA, EV50, SS%
-        b_ex = statcast_batter_expected_stats(2026, minPA=1)
-        # Merge on player_id
         b_ev['player_id'] = b_ev['player_id'].astype(str)
+
+        # expected_stats: player_id, last_name, first_name, xwoba, xslg, woba,
+        #                 avg_best_speed (EV50), sweet_spot_percent (SS%)
+        b_ex = statcast_batter_expected_stats(2026, minPA=1)
         b_ex['player_id'] = b_ex['player_id'].astype(str)
-        merged_b = pd.merge(b_ev, b_ex, on='player_id', how='outer', suffixes=('_ev', '_ex'))
-        # Coalesce name columns
-        for col in ['last_name', 'first_name']:
-            col_ev = col + '_ev'
-            col_ex = col + '_ex'
-            if col_ev in merged_b.columns and col_ex in merged_b.columns:
-                merged_b[col] = merged_b[col_ev].combine_first(merged_b[col_ex])
+
+        # Drop duplicate name/non-stat columns from expected before merge
+        b_ex_cols = ['player_id'] + [c for c in b_ex.columns
+                     if c not in b_ev.columns or c == 'player_id']
+        b_ex_slim = b_ex[b_ex_cols]
+
+        merged_b = pd.merge(b_ev, b_ex_slim, on='player_id', how='outer')
+
         with _pyb_lock:
             _pyb_batter_cache = merged_b
 
-        # Pitcher exit velo / barrels
+        # ── PITCHERS ─────────────────────────────────────────────────────────
         p_ev = statcast_pitcher_exitvelo_barrels(2026, minBBE=1)
-        # Pitcher expected stats
-        p_ex = statcast_pitcher_expected_stats(2026, minPA=1)
         p_ev['player_id'] = p_ev['player_id'].astype(str)
+
+        p_ex = statcast_pitcher_expected_stats(2026, minPA=1)
         p_ex['player_id'] = p_ex['player_id'].astype(str)
-        merged_p = pd.merge(p_ev, p_ex, on='player_id', how='outer', suffixes=('_ev', '_ex'))
-        for col in ['last_name', 'first_name']:
-            col_ev = col + '_ev'
-            col_ex = col + '_ex'
-            if col_ev in merged_p.columns and col_ex in merged_p.columns:
-                merged_p[col] = merged_p[col_ev].combine_first(merged_p[col_ex])
+
+        p_ex_cols = ['player_id'] + [c for c in p_ex.columns
+                     if c not in p_ev.columns or c == 'player_id']
+        p_ex_slim = p_ex[p_ex_cols]
+
+        merged_p = pd.merge(p_ev, p_ex_slim, on='player_id', how='outer')
+
         with _pyb_lock:
             _pyb_pitcher_cache = merged_p
+
+        # Log column names on first run so we can verify field mappings
+        import os
+        if os.environ.get('DEBUG_PYB'):
+            print(f"[pyb] batter cols: {list(merged_b.columns)}")
+            print(f"[pyb] pitcher cols: {list(merged_p.columns)}")
+            # Sample row for a known player
+            test = merged_b[merged_b['player_id'] == '608070']
+            if not test.empty:
+                print(f"[pyb] Ramirez row: {dict(test.iloc[0])}")
+
         return True
     except Exception as e:
+        print(f"[pyb] ERROR: {e}")
+        import traceback; traceback.print_exc()
         return False
 
 
@@ -508,13 +526,14 @@ KNOWN_PLAYER_IDS = {
     'tyler stephenson': '661397',
     'eugenio suarez': '553993',
     'eugenio suárez': '553993',
-    'matt mclain': '682006',
+    'matt mclain': '680574',   # corrected ID
     'riley greene': '682985',
     'spencer torkelson': '679529',
     'gleyber torres': '650402',
     'javier baez': '595879',
     'javier báez': '595879',
-    'kevin mcgonigle': '694595',
+    'kevin mcgonigle': '805808',   # corrected ID
+    'tyler stephenson': '663886',
     'brice turang': '671218',
     'william contreras': '661388',
     'jake bauers': '664353',
