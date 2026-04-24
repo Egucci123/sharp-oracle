@@ -220,57 +220,29 @@ _pyb_lock = threading.Lock()
 
 
 def _pull_pybaseball_data():
-    """Pull and merge all 2026 batter and pitcher data via pybaseball."""
+    """Pull all 2026 batter and pitcher data via pybaseball. Store separately, no merge."""
     global _pyb_batter_cache, _pyb_pitcher_cache
     if not PYBASEBALL_OK:
         return False
     try:
-        # ── BATTERS ──────────────────────────────────────────────────────────
-        # exitvelo_barrels: player_id, last_name, first_name, avg_hit_speed,
-        #                   hard_hit_percent, brl_percent, brl_pa
+        # Store as dict of DataFrames keyed by type — no merging, look up per stat
         b_ev = statcast_batter_exitvelo_barrels(2026, minBBE=1)
         b_ev['player_id'] = b_ev['player_id'].astype(str)
 
-        # expected_stats: player_id, last_name, first_name, xwoba, xslg, woba,
-        #                 avg_best_speed (EV50), sweet_spot_percent (SS%)
         b_ex = statcast_batter_expected_stats(2026, minPA=1)
         b_ex['player_id'] = b_ex['player_id'].astype(str)
 
-        # Drop duplicate name/non-stat columns from expected before merge
-        b_ex_cols = ['player_id'] + [c for c in b_ex.columns
-                     if c not in b_ev.columns or c == 'player_id']
-        b_ex_slim = b_ex[b_ex_cols]
-
-        merged_b = pd.merge(b_ev, b_ex_slim, on='player_id', how='outer')
-
         with _pyb_lock:
-            _pyb_batter_cache = merged_b
+            _pyb_batter_cache = {'ev': b_ev, 'ex': b_ex}
 
-        # ── PITCHERS ─────────────────────────────────────────────────────────
         p_ev = statcast_pitcher_exitvelo_barrels(2026, minBBE=1)
         p_ev['player_id'] = p_ev['player_id'].astype(str)
 
         p_ex = statcast_pitcher_expected_stats(2026, minPA=1)
         p_ex['player_id'] = p_ex['player_id'].astype(str)
 
-        p_ex_cols = ['player_id'] + [c for c in p_ex.columns
-                     if c not in p_ev.columns or c == 'player_id']
-        p_ex_slim = p_ex[p_ex_cols]
-
-        merged_p = pd.merge(p_ev, p_ex_slim, on='player_id', how='outer')
-
         with _pyb_lock:
-            _pyb_pitcher_cache = merged_p
-
-        # Log column names on first run so we can verify field mappings
-        import os
-        if os.environ.get('DEBUG_PYB'):
-            print(f"[pyb] batter cols: {list(merged_b.columns)}")
-            print(f"[pyb] pitcher cols: {list(merged_p.columns)}")
-            # Sample row for a known player
-            test = merged_b[merged_b['player_id'] == '608070']
-            if not test.empty:
-                print(f"[pyb] Ramirez row: {dict(test.iloc[0])}")
+            _pyb_pitcher_cache = {'ev': p_ev, 'ex': p_ex}
 
         return True
     except Exception as e:
@@ -280,55 +252,75 @@ def _pull_pybaseball_data():
 
 
 def _get_pyb_row(player_id, player_type='batter'):
-    """Get a single player's row from pybaseball cache by MLBAM ID."""
+    """Get rows from both pybaseball DataFrames for a player."""
     with _pyb_lock:
-        df = _pyb_batter_cache if player_type == 'batter' else _pyb_pitcher_cache
-    if df is None or df.empty:
+        cache = _pyb_batter_cache if player_type == 'batter' else _pyb_pitcher_cache
+    if cache is None:
         return None
     pid = str(player_id)
-    rows = df[df['player_id'] == pid]
-    if rows.empty:
+    ev_row = None
+    ex_row = None
+    ev_df = cache.get('ev')
+    ex_df = cache.get('ex')
+    if ev_df is not None and not ev_df.empty:
+        rows = ev_df[ev_df['player_id'] == pid]
+        if not rows.empty:
+            ev_row = rows.iloc[0]
+    if ex_df is not None and not ex_df.empty:
+        rows = ex_df[ex_df['player_id'] == pid]
+        if not rows.empty:
+            ex_row = rows.iloc[0]
+    if ev_row is None and ex_row is None:
         return None
-    return rows.iloc[0]
+    return {'ev': ev_row, 'ex': ex_row}
 
 
-def _extract_pyb_stats(row, player_type='batter'):
-    """Convert a pybaseball DataFrame row to our internal stats dict."""
-    if row is None:
+def _extract_pyb_stats(rows, player_type='batter'):
+    """Extract stats from separate ev/ex pybaseball rows."""
+    if rows is None:
         return None
 
-    def f(col, *aliases):
-        for c in (col,) + aliases:
+    def f(row, *cols):
+        if row is None:
+            return None
+        for c in cols:
             if c in row.index:
                 v = row[c]
                 try:
                     if pd.notna(v):
-                        return float(v)
+                        fv = float(v)
+                        if fv == fv:  # not NaN
+                            return fv
                 except Exception:
                     pass
         return None
 
+    ev = rows.get('ev')
+    ex = rows.get('ex')
+
     if player_type == 'batter':
         return {
-            'exit_velocity':  f('avg_hit_speed'),
-            'hard_hit_pct':   f('hard_hit_percent'),
-            'barrel_pct':     f('brl_percent', 'brl_pa', 'barrel_batted_rate'),
-            'xwoba':          f('xwoba'),
-            'woba':           f('woba'),
-            'xslg':           f('xslg', 'est_slg'),
-            'sweet_spot_pct': f('sweet_spot_percent', 'la_sweet_spot_percent'),
-            'ev50':           f('avg_best_speed', 'ev50'),
-            'fb_pct':         None,  # not in pybaseball — will try Savant scrape
+            # From exitvelo_barrels
+            'exit_velocity':  f(ev, 'avg_hit_speed'),
+            'hard_hit_pct':   f(ev, 'hard_hit_percent'),
+            'barrel_pct':     f(ev, 'brl_percent', 'brl_pa', 'barrel_batted_rate'),
+            # From expected_stats
+            'xwoba':          f(ex, 'xwoba', 'est_woba'),
+            'woba':           f(ex, 'woba') or f(ev, 'woba'),
+            'xslg':           f(ex, 'xslg', 'est_slg'),
+            'sweet_spot_pct': f(ex, 'sweet_spot_percent', 'la_sweet_spot_percent'),
+            'ev50':           f(ex, 'avg_best_speed', 'ev50'),
+            'fb_pct':         None,  # not in pybaseball
         }
     else:  # pitcher
         return {
-            'exit_velocity':  f('avg_hit_speed'),
-            'hard_hit_pct':   f('hard_hit_percent'),
-            'barrel_pct':     f('brl_percent', 'brl_pa', 'barrel_batted_rate'),
-            'xwoba':          f('xwoba'),
-            'woba':           f('woba'),
-            'gb_pct':         None,  # not in pybaseball expected_stats — Savant fallback
-            'csw_pct':        None,  # not in pybaseball — Savant fallback
+            'exit_velocity':  f(ev, 'avg_hit_speed'),
+            'hard_hit_pct':   f(ev, 'hard_hit_percent'),
+            'barrel_pct':     f(ev, 'brl_percent', 'brl_pa', 'barrel_batted_rate'),
+            'xwoba':          f(ex, 'xwoba', 'est_woba'),
+            'woba':           f(ex, 'woba') or f(ev, 'woba'),
+            'gb_pct':         None,  # Savant fallback
+            'csw_pct':        None,  # Savant fallback
         }
 
 
