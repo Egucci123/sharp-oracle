@@ -364,6 +364,7 @@ def _name_match_score(row, target):
 
 # Known player IDs for players that commonly fail name matching
 KNOWN_PLAYER_IDS = {
+    # Common accent/spelling variants
     'jose ramirez': '608070',
     'jose ramírez': '608070',
     'christian vazquez': '477132',
@@ -371,35 +372,134 @@ KNOWN_PLAYER_IDS = {
     'j.d. martinez': '502110',
     'jd martinez': '502110',
     'michael a. taylor': '534606',
+    # Players confirmed returning wrong data from bulk leaderboard
+    'dane myers': '667472',
+    'jahmai jones': '663330',
+    'spencer steer': '668715',
+    # Common players with name collision risk
+    'elly de la cruz': '682998',
+    'ke bryan hayes': '663647',
+    "ke'bryan hayes": '663647',
+    'sal stewart': '694192',
+    'dillon dingler': '681584',
+    'tyler stephenson': '661397',
+    'eugenio suarez': '553993',
+    'eugenio suárez': '553993',
+    'matt mclain': '682006',
+    'riley greene': '682985',
+    'spencer torkelson': '679529',
+    'gleyber torres': '650402',
+    'javier baez': '595879',
+    'javier báez': '595879',
+    'kevin mcgonigle': '694595',
+    'brice turang': '671218',
+    'william contreras': '661388',
+    'jake bauers': '664353',
+    'gary sanchez': '425794',
+    'gary sánchez': '425794',
+    'garrett mitchell': '669060',
+    'kerry carpenter': '681481',
+    'wenceel perez': '676080',
+    'wenceel pérez': '676080',
+    'jahmai jones': '663330',
 }
+
+
+# ─── MLB PLAYER ID CACHE ──────────────────────────────────────────────────────
+# Populated at first use from MLB Stats API — covers ALL active 2026 players.
+# MLBAM IDs are identical to Baseball Savant player IDs.
+_mlb_player_id_cache = {}
+_mlb_cache_loaded = False
+_mlb_cache_lock = threading.Lock()
+
+
+def _load_mlb_player_cache():
+    """Pull all active 2026 MLB players from Stats API and cache name→ID."""
+    global _mlb_player_id_cache, _mlb_cache_loaded
+    with _mlb_cache_lock:
+        if _mlb_cache_loaded:
+            return _mlb_player_id_cache
+    url = 'https://statsapi.mlb.com/api/v1/sports/1/players?season=2026'
+    req = urllib.request.Request(url, headers=_HEADERS)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read())
+        people = data.get('people', [])
+        cache = {}
+        for p in people:
+            pid = str(p.get('id', ''))
+            if not pid:
+                continue
+            full  = normalize_name(p.get('fullName', '')).lower()
+            first = normalize_name(p.get('firstName', '')).lower()
+            last  = normalize_name(p.get('lastName', '')).lower()
+            for key in [full, f'{first} {last}', f'{last} {first}', f'{last}, {first}']:
+                if key.strip():
+                    cache[key.strip()] = pid
+            # Also map first-word + last for nicknames (e.g. "ken" for "kenneth")
+            parts = first.split()
+            if len(parts) > 1 and last:
+                cache[f'{parts[0]} {last}'] = pid
+        with _mlb_cache_lock:
+            _mlb_player_id_cache = cache
+            _mlb_cache_loaded = True
+        return cache
+    except Exception:
+        with _mlb_cache_lock:
+            _mlb_cache_loaded = True
+        return {}
+
+
+def get_player_id(name):
+    """Return MLBAM/Savant player ID for a name.
+    Priority: KNOWN_PLAYER_IDS (hardcoded) → MLB Stats API cache → None.
+    """
+    key = normalize_name(name).lower()
+    # 1. Hardcoded fallbacks
+    if key in KNOWN_PLAYER_IDS:
+        return KNOWN_PLAYER_IDS[key]
+    # 2. Full MLB cache
+    cache = _load_mlb_player_cache()
+    pid = cache.get(key)
+    if pid:
+        return pid
+    # 3. Partial match — first + last only
+    parts = key.split()
+    if len(parts) >= 2:
+        short = f'{parts[0]} {parts[-1]}'
+        pid = cache.get(short)
+        if pid:
+            return pid
+    return None
+
 
 def lookup_player_in_leaderboard(name, player_type='batter'):
     """Find player stats directly from leaderboard by name matching.
     Also enriches with xSLG and SS% from the statcast leaderboard."""
-    # Check known IDs first
-    name_key = normalize_name(name).lower()
-    forced_pid = KNOWN_PLAYER_IDS.get(name_key)
+    # Use get_player_id() — checks KNOWN_PLAYER_IDS then full MLB Stats API cache
+    forced_pid = get_player_id(name)
 
     rows = _load_leaderboard(player_type)
-    if not rows:
-        return None, None
 
     best_score = 0
     best_row = None
+
     for row in rows:
         row_pid = str(row.get('player_id') or row.get('batter') or row.get('pitcher') or '')
-        # If we have a forced pid, match by ID first
-        if forced_pid and row_pid == forced_pid:
-            best_row = row
-            best_score = 100
-            break
+        # If we have a known ID, ONLY match that exact row — ignore all name matching
+        if forced_pid:
+            if row_pid == forced_pid:
+                best_row = row
+                best_score = 100
+                break
+            continue
         score = _name_match_score(row, name)
         if score > best_score:
             best_score = score
             best_row = row
 
     if best_score < 2 or best_row is None:
-        # Last resort: use forced_pid and fetch directly
+        # Bulk leaderboard failed — use known PID and let fetch_one_player try individual fetch
         if forced_pid:
             return forced_pid, None
         return None, None
@@ -628,7 +728,12 @@ def savant_get(url, timeout=15, accept_json=False):
 
 
 def search_player_id(name):
-    """Return Savant player_id for a given name, or None."""
+    """Return Savant player_id for a given name, or None.
+    Checks local MLB Stats API cache before hitting Savant search endpoint."""
+    # Try local cache first — avoids rate-limited Savant search
+    pid = get_player_id(name)
+    if pid:
+        return pid
     clean = normalize_name(name)
 
     def try_search(q):
