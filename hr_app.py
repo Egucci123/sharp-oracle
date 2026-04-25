@@ -694,22 +694,26 @@ def get_player_id(name):
         return KNOWN_PLAYER_IDS[key]
 
     # 2. pybaseball playerid_lookup — covers every MLB player by name
+    # Wrapped in 8s timeout — lookup downloads a CSV on first call which can block
     if PYBASEBALL_OK:
         try:
+            import concurrent.futures
             parts = key.split()
             if len(parts) >= 2:
-                last = parts[-1]
-                first = parts[0]
-                result = playerid_lookup(last, first)
-                if result is not None and not result.empty:
-                    # Filter to players who actually played in MLB
-                    played = result[result['mlb_played_first'].notna()]
-                    if played.empty:
-                        played = result
-                    # Pick most recent player if multiple
-                    pid = str(int(played.sort_values('mlb_played_last', ascending=False).iloc[0]['key_mlbam']))
-                    if pid and pid != 'nan':
-                        return pid
+                last, first = parts[-1], parts[0]
+                def do_lookup():
+                    r = playerid_lookup(last, first)
+                    if r is not None and not r.empty:
+                        played = r[r['mlb_played_first'].notna()]
+                        if played.empty:
+                            played = r
+                        pid = str(int(played.sort_values('mlb_played_last', ascending=False).iloc[0]['key_mlbam']))
+                        return pid if pid and pid != 'nan' else None
+                    return None
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    pid = ex.submit(do_lookup).result(timeout=8)
+                if pid:
+                    return pid
         except Exception:
             pass
 
