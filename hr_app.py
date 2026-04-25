@@ -2769,15 +2769,27 @@ class Handler(BaseHTTPRequestHandler):
                         if isinstance(arr, list) and arr and isinstance(arr[0], dict):
                             row = arr[0]
                             year_val = str(row.get('year', row.get('season', row.get('game_year', ''))))
+                            # Find row matching player_id
+                            target_row = None
+                            for r in arr:
+                                if str(r.get('player_id', '')) == pid:
+                                    target_row = r
+                                    break
+                            if target_row is None:
+                                target_row = row
                             blobs_found.append({
                                 'year': year_val,
-                                'keys': sorted(row.keys()),
-                                'ev50_val': row.get('avg_best_speed') or row.get('ev50'),
-                                'ss_val': row.get('anglesweetspotpercent') or row.get('sweet_spot_percent'),
-                                'fb_val': row.get('fb_percent') or row.get('flyball_percent'),
-                                'ev_val': row.get('avg_hit_speed'),
-                                'hh_val': row.get('ev95percent') or row.get('hard_hit_percent'),
-                                'brl_val': row.get('brl_percent') or row.get('barrel_batted_rate'),
+                                'row_count': len(arr),
+                                'player_id_match': str(target_row.get('player_id','')) == pid,
+                                'keys': sorted(target_row.keys()),
+                                'avg_ev': target_row.get('avg_ev'),
+                                'hard_hit_bip_percent': target_row.get('hard_hit_bip_percent'),
+                                'brl_bip_percent': target_row.get('brl_bip_percent'),
+                                'fb_percent': target_row.get('fb_percent'),
+                                'xwoba': target_row.get('xwoba'),
+                                'xslg': target_row.get('xslg'),
+                                'woba': target_row.get('woba'),
+                                'player_id': target_row.get('player_id'),
                             })
                     except Exception:
                         pass
