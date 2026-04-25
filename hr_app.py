@@ -601,11 +601,11 @@ KNOWN_PLAYER_IDS = {
     'randy arozarena': '668227',    # savant-player/randy-arozarena-668227
     'matthew liberatore': '669461', # savant-player/matthew-liberatore-669461
     'cal raleigh': '663728',        # savant-player/cal-raleigh-663728
-    'masyn winn': '694786',         # savant-player/masyn-winn-694786
+    'masyn winn': '691026',          # savant-player/masyn-winn-691026
     'jp crawford': '641487',        # savant-player/jp-crawford-641487
     'j.p. crawford': '641487',
     'josh naylor': '647304',        # savant-player/josh-naylor-647304
-    'victor scott ii': '694654',    # savant-player/victor-scott-ii-694654
+    'victor scott ii': '687363',    # savant-player/victor-scott-ii-687363
     # 2026-04-25 additional verified IDs
     'rhys hoskins': '543333',        # savant-player/rhys-hoskins-543333
     'juan brito': '701538',          # savant-player/juan-brito-701538
@@ -623,9 +623,9 @@ KNOWN_PLAYER_IDS = {
     'angel martinez': '677651',      # savant-player/angel-martinez-677651
     'ángel martínez': '677651',
     'brayan rocchio': '672523',      # savant-player/brayan-rocchio-672523
-    'jj wetherholt': '694192',       # savant-player/jj-wetherholt-694192
-    'masyn winn': '694786',
-    'victor scott ii': '694654',
+    'jj wetherholt': '802139',       # savant-player/jj-wetherholt-694192
+    'masyn winn': '691026',
+    'victor scott ii': '687363',
     # 2026-04-25 fixes — confirmed from Savant URLs
     'ryan jeffers': '680777',        # was missing — savant-player/ryan-jeffers-680777
     'shane mcclanahan': '663556',    # savant-player/shane-mcclanahan-663556
@@ -1212,10 +1212,10 @@ def fetch_one_player(info):
         return result
 
     ptype = 'pitcher' if info.get('role') == 'PITCHER' else 'batter'
-    pid = None
 
-    # Get player ID — KNOWN_PLAYER_IDS → MLB Stats API cache → Savant search
-    pid = get_player_id(name)
+    # Use pre-resolved ID if available (set by resolve_all_ids before parallel fetch)
+    # This prevents 18 parallel threads all doing ID resolution simultaneously
+    pid = info.get('resolved_player_id') or get_player_id(name)
     if not pid:
         pid = search_player_id(name)
     if not pid:
@@ -1939,6 +1939,33 @@ def fetch_bullpen_era(team_name):
 
     return result
 
+
+def resolve_all_ids(player_list):
+    """
+    Step 2 of the new pipeline: resolve MLBAM IDs for all players sequentially
+    before any parallel fetching starts.
+    Returns dict: {normalized_name: player_id or None}
+    Logs results so Railway logs show exactly which IDs were found/missing.
+    """
+    id_map = {}
+    missing = []
+    for info in player_list:
+        name = info.get('name', '').strip()
+        if not name:
+            continue
+        pid = get_player_id(name)
+        if not pid:
+            pid = search_player_id(name)
+        id_map[name] = pid
+        if not pid:
+            missing.append(name)
+
+    found = len(id_map) - len(missing)
+    print(f"[ID RESOLUTION] {found}/{len(id_map)} resolved | "
+          f"Missing: {missing if missing else 'none'}")
+    return id_map
+
+
 def run_job(jid, sid, raw_lineup, game_date=None):
     with store_lock:
         jobs[jid]['status'] = 'running'
@@ -1976,29 +2003,39 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         step_set(jid, 2, 'done',
                  f'{park_name} [{park_cat}] | {temp_str} {weather["condition"]} | {weather["flag"]}')
 
-        # S3 — pitchers
-        step_set(jid, 3, 'active', 'Fetching pitcher Statcast...')
+        # S3 — Build full player list and resolve ALL IDs first (sequential, before any fetching)
+        step_set(jid, 3, 'active', 'Resolving player IDs...')
         pitcher_list = []
         hp = parsed.get('home_pitcher', {})
         ap = parsed.get('away_pitcher', {})
         if hp.get('name'):
-            # home pitcher faces the AWAY batters
             pitcher_list.append({**hp, 'role': 'PITCHER', 'team': home,
                                   'faces_team': away, 'lineup_pos': 0})
         if ap.get('name'):
-            # away pitcher faces the HOME batters
             pitcher_list.append({**ap, 'role': 'PITCHER', 'team': away,
                                   'faces_team': home, 'lineup_pos': 0})
-        pitcher_stats = fetch_all_parallel(pitcher_list, workers=2)
-        step_set(jid, 3, 'done', f'Pitchers: {len(pitcher_stats)} fetched')
-
-        # S4 — batters
-        step_set(jid, 4, 'active', 'Fetching batter Statcast in parallel...')
         batter_list = []
         for b in parsed.get('home_batters', []):
             batter_list.append({**b, 'role': 'BATTER', 'team': home})
         for b in parsed.get('away_batters', []):
             batter_list.append({**b, 'role': 'BATTER', 'team': away})
+
+        # Resolve all IDs sequentially — this is the single source of truth
+        all_players = pitcher_list + batter_list
+        id_map = resolve_all_ids(all_players)
+
+        # Inject confirmed IDs into player dicts before fetching
+        for p in all_players:
+            name = p.get('name', '')
+            pid = id_map.get(name)
+            if pid:
+                p['resolved_player_id'] = pid
+
+        step_set(jid, 3, 'done', f'IDs resolved: {sum(1 for v in id_map.values() if v)}/{len(id_map)}')
+
+        # S4 — Now fetch stats using confirmed IDs (parallel safe — no ID resolution in workers)
+        step_set(jid, 4, 'active', 'Fetching Statcast in parallel...')
+        pitcher_stats = fetch_all_parallel(pitcher_list, workers=2)
         batter_stats = fetch_all_parallel(batter_list, workers=12)
         all_statcast = pitcher_stats + batter_stats
         ok = sum(1 for x in all_statcast if x.get('fetch_status') == 'ok')
