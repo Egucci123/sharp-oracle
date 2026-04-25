@@ -30,7 +30,7 @@ try:
         playerid_lookup,
     )
     import pybaseball
-    pybaseball.cache.enable()
+    pybaseball.cache.disable()  # Always pull fresh — no stale disk cache
     PYBASEBALL_OK = True
 except ImportError:
     PYBASEBALL_OK = False
@@ -207,6 +207,9 @@ _HEADERS = {
     'Accept': 'application/json, text/html, */*',
     'Accept-Language': 'en-US,en;q=0.9',
     'Referer': 'https://baseballsavant.mlb.com/',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
 }
 
 
@@ -924,6 +927,9 @@ def savant_get(url, timeout=15, accept_json=False):
     headers = dict(_HEADERS)
     if accept_json:
         headers['Accept'] = 'application/json'
+    # Add timestamp cache-buster to every Savant URL
+    sep = '&' if '?' in url else '?'
+    url = f"{url}{sep}_={int(time.time())}"
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -1057,101 +1063,78 @@ def _extract_leaderboard_row(row):
 
 def fetch_from_player_page(player_id, player_name=None):
     """
-    Fallback: scrape the savant player page.
-    Tries name-slug URL first, then numeric ID URL.
-    Looks for the stat summary line that Savant displays at the top:
-      (2026) Avg Exit Velocity: X, Hard Hit %: X, wOBA: X, xwOBA: X, Barrel %: X
-    This is the most reliable text pattern on the page.
+    Fetch player Statcast stats via direct Savant JSON endpoints.
+    No HTML scraping — pure JSON API calls with cache-busting timestamps.
+    Source A: /leaderboard/expected_statistics -> xwOBA, xSLG, wOBA
+    Source B: /leaderboard/statcast           -> EV, HH%, Barrel%, EV50, SS%
+    Source C: /leaderboard/batted-ball        -> FB%
     """
-    # Use numeric ID only — slug URLs can resolve to wrong cached pages
-    # Also try the stats=statcast URL which forces the statcast summary line
-    urls = [
-        f'https://baseballsavant.mlb.com/savant-player/{player_id}?stats=statcast-r-hitting-mlb&season={CURRENT_YEAR}',
-        f'https://baseballsavant.mlb.com/savant-player/{player_id}',
-    ]
-
-    html = None
-    for url in urls:
-        html = savant_get(url)
-        if html:
-            break
-    if not html:
-        return None
-    if not html:
-        return None
-
+    pid = str(player_id)
     stats = {
-        'exit_velocity': None, 'hard_hit_pct': None,
-        'woba': None, 'xwoba': None, 'barrel_pct': None,
-        'xslg': None, 'sweet_spot_pct': None, 'ev50': None, 'fb_pct': None,
+        'exit_velocity': None, 'hard_hit_pct': None, 'barrel_pct': None,
+        'xwoba': None, 'woba': None, 'xslg': None,
+        'sweet_spot_pct': None, 'ev50': None, 'fb_pct': None,
     }
 
-    # PRIMARY: the "(2026) Avg Exit Velocity: X, Hard Hit %: X, ..." summary line
-    year_block = re.search(
-        r'\(2026\)\s*Avg\s*Exit\s*Vel[a-z]*:\s*([\d.]+)[,\s]*'
-        r'Hard\s*Hit\s*%:\s*([\d.]+)[,\s]*'
-        r'wOBA:\s*([.\d]+)[,\s]*'
-        r'xwOBA:\s*([.\d]+)[,\s]*'
-        r'Barrel\s*%:\s*([\d.]+)',
-        html, re.I
-    )
-    if year_block:
-        stats['exit_velocity'] = safe_float(year_block.group(1))
-        stats['hard_hit_pct']  = safe_float(year_block.group(2))
-        stats['woba']          = safe_float(year_block.group(3))
-        stats['xwoba']         = safe_float(year_block.group(4))
-        stats['barrel_pct']    = safe_float(year_block.group(5))
+    def g(row, *keys):
+        for k in keys:
+            v = row.get(k)
+            if v not in (None, '', 'null', 'None', 'NaN'):
+                f = safe_float(v)
+                if f is not None:
+                    return f
+        return None
 
-    # SECONDARY: scan ALL JSON blobs on the page for extra stats
-    # Don't filter by year — just merge any plausible stat keys found
-    # The page always loads current year data first
-    for blob in re.findall(r'(\[{.+?}\])', html, re.DOTALL):
+    def fetch_json(url):
+        raw = savant_get(url, accept_json=True)
+        if not raw:
+            return None
         try:
-            arr = json.loads(blob)
-            if not (isinstance(arr, list) and arr and isinstance(arr[0], dict)):
-                continue
-            row = arr[0]
-            # Skip if this looks like old season data
-            year_val = str(row.get('year', row.get('season', row.get('game_year', ''))))
-            if year_val and year_val not in ('2026', ''):
-                continue
-            extracted = _extract_leaderboard_row(row)
-            if not extracted:
-                continue
-            # Merge — only fill in fields still missing
-            for k, v in extracted.items():
-                if v is not None and stats.get(k) is None:
-                    stats[k] = v
+            data = json.loads(raw)
+            rows = data if isinstance(data, list) else data.get('data', [])
+            if not rows:
+                return None
+            for row in rows:
+                rid = str(row.get('player_id') or row.get('batter') or row.get('pitcher') or '')
+                if rid == pid:
+                    return row
+            if len(rows) == 1:
+                return rows[0]
+            return None
         except Exception:
-            pass
+            return None
 
-    # TERTIARY: regex key:value scan for any remaining missing fields
-    kv_map = [
-        ('exit_velocity',   [r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?']),
-        ('hard_hit_pct',    [r'"hard_hit_percent"\s*:\s*"?([\d.]+)"?']),
-        ('xwoba',           [r'"xwoba"\s*:\s*"?([\d.]+)"?']),
-        ('woba',            [r'"woba"\s*:\s*"?([\d.]+)"?']),
-        ('barrel_pct',      [r'"barrel_batted_rate"\s*:\s*"?([\d.]+)"?',
-                             r'"barrels_per_bbe_percent"\s*:\s*"?([\d.]+)"?']),
-        ('xslg',            [r'"xslg"\s*:\s*"?([\d.]+)"?',
-                             r'"est_slg"\s*:\s*"?([\d.]+)"?']),
-        ('sweet_spot_pct',  [r'"sweet_spot_percent"\s*:\s*"?([\d.]+)"?',
-                             r'"la_sweet_spot_percent"\s*:\s*"?([\d.]+)"?']),
-        ('ev50',            [r'"avg_best_speed"\s*:\s*"?([\d.]+)"?']),
-        ('fb_pct',          [r'"fb_percent"\s*:\s*"?([\d.]+)"?',
-                             r'"flyball_percent"\s*:\s*"?([\d.]+)"?']),
-    ]
-    for stat, pats in kv_map:
-        if stats.get(stat) is not None:
-            continue
-        for pat in pats:
-            m = re.search(pat, html, re.I)
-            if m:
-                stats[stat] = safe_float(m.group(1))
-                break
+    # Source A: expected_statistics
+    row_a = fetch_json(
+        f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
+        f'?type=batter&year={CURRENT_YEAR}&player_id={pid}&min=0'
+    )
+    if row_a:
+        stats['xwoba'] = g(row_a, 'est_woba', 'xwoba')
+        stats['woba']  = g(row_a, 'woba')
+        stats['xslg']  = g(row_a, 'est_slg', 'xslg')
+
+    # Source B: statcast leaderboard
+    row_b = fetch_json(
+        f'https://baseballsavant.mlb.com/leaderboard/statcast'
+        f'?type=batter&year={CURRENT_YEAR}&player_id={pid}&min=0'
+    )
+    if row_b:
+        stats['exit_velocity']  = g(row_b, 'avg_hit_speed')
+        stats['hard_hit_pct']   = g(row_b, 'ev95percent', 'hard_hit_percent')
+        stats['barrel_pct']     = g(row_b, 'brl_percent', 'barrel_batted_rate')
+        stats['ev50']           = g(row_b, 'avg_best_speed', 'ev50')
+        stats['sweet_spot_pct'] = g(row_b, 'anglesweetspotpercent', 'sweet_spot_percent')
+
+    # Source C: batted-ball for FB%
+    row_c = fetch_json(
+        f'https://baseballsavant.mlb.com/leaderboard/batted-ball'
+        f'?type=batter&year={CURRENT_YEAR}&player_id={pid}'
+    )
+    if row_c:
+        stats['fb_pct'] = g(row_c, 'fb_percent', 'flyball_percent', 'fly_ball_percent')
 
     return stats if any(v is not None for v in stats.values()) else None
-
 
 
 def fetch_extended_batter_stats(player_id):
@@ -1205,10 +1188,11 @@ def fetch_extended_batter_stats(player_id):
 
 def fetch_pitcher_extras(player_id):
     """
-    Fetch GB% and CSW% for pitchers using cached full leaderboards.
-    Avoids per-pitcher requests that get rate-limited.
+    Fetch GB% and CSW% for pitchers via direct Savant JSON endpoints.
+    Uses individual player_id filter — no bulk cache, always fresh.
     """
     result = {'gb_pct': None, 'csw_pct': None}
+    pid = str(player_id)
 
     def g(row, *keys):
         for k in keys:
@@ -1219,21 +1203,52 @@ def fetch_pitcher_extras(player_id):
                     return f
         return None
 
-    # GB% from cached batted-ball leaderboard
-    bb_rows = _load_batted_ball_cache()
-    for row in bb_rows:
-        pid = str(row.get('player_id') or row.get('pitcher') or '')
-        if pid == str(player_id):
-            result['gb_pct'] = g(row, 'gb_percent', 'groundball_percent', 'gb_pct', 'gb')
-            break
+    def fetch_json(url):
+        raw = savant_get(url, accept_json=True)
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            rows = data if isinstance(data, list) else data.get('data', [])
+            if not rows:
+                return None
+            for row in rows:
+                rid = str(row.get('player_id') or row.get('pitcher') or '')
+                if rid == pid:
+                    return row
+            if len(rows) == 1:
+                return rows[0]
+            return None
+        except Exception:
+            return None
 
-    # CSW% from cached arsenal leaderboard
-    csw_rows = _load_arsenal_cache()
-    for row in csw_rows:
-        pid = str(row.get('player_id') or row.get('pitcher') or '')
-        if pid == str(player_id):
-            result['csw_pct'] = g(row, 'csw', 'csw_pct', 'csw_percent', 'called_strike_whiff_pct')
-            break
+    # GB% from pitcher batted-ball endpoint
+    row_bb = fetch_json(
+        f'https://baseballsavant.mlb.com/leaderboard/batted-ball'
+        f'?type=pitcher&year={CURRENT_YEAR}&player_id={pid}'
+    )
+    if row_bb:
+        result['gb_pct'] = g(row_bb, 'gb_percent', 'groundball_percent', 'gb_pct', 'gb')
+
+    # CSW% from pitch arsenal endpoint
+    row_csw = fetch_json(
+        f'https://baseballsavant.mlb.com/leaderboard/pitch-arsenals'
+        f'?type=pitcher&year={CURRENT_YEAR}&player_id={pid}'
+    )
+    if row_csw:
+        result['csw_pct'] = g(row_csw, 'csw', 'csw_pct', 'csw_percent', 'called_strike_whiff_pct')
+
+    # Fallback: bulk caches if individual endpoints blocked
+    if result['gb_pct'] is None:
+        for row in _load_batted_ball_cache():
+            if str(row.get('player_id') or row.get('pitcher') or '') == pid:
+                result['gb_pct'] = g(row, 'gb_percent', 'groundball_percent', 'gb_pct', 'gb')
+                break
+    if result['csw_pct'] is None:
+        for row in _load_arsenal_cache():
+            if str(row.get('player_id') or row.get('pitcher') or '') == pid:
+                result['csw_pct'] = g(row, 'csw', 'csw_pct', 'csw_percent', 'called_strike_whiff_pct')
+                break
 
     return result
 
@@ -1331,6 +1346,36 @@ def fetch_one_player(info):
         return result
 
     # All stats already sanity-checked during extraction above
+    # Cross-check: compare pybaseball xwOBA vs Savant JSON xwOBA
+    # If they disagree by more than 0.020, flag it and prefer pybaseball (confirmed exact)
+    pyb_xwoba = None
+    if PYBASEBALL_OK and pid:
+        with _pyb_lock:
+            cache = _pyb_batter_cache if ptype == 'batter' else _pyb_pitcher_cache
+        if cache is not None:
+            ex_df = cache.get('ex')
+            if ex_df is not None and not ex_df.empty:
+                rows_ex = ex_df[ex_df['player_id'] == str(pid)]
+                if not rows_ex.empty:
+                    try:
+                        v = float(rows_ex.iloc[0]['est_woba'])
+                        if v == v:
+                            pyb_xwoba = round(v, 3)
+                    except Exception:
+                        pass
+
+    if pyb_xwoba is not None and result.get('xwoba') is not None:
+        diff = abs(pyb_xwoba - result['xwoba'])
+        if diff > 0.020:
+            # Significant disagreement — prefer pybaseball (confirmed exact from MLBAM ID)
+            result['xwoba'] = pyb_xwoba
+            sources.append('pyb-xwoba-override')
+        else:
+            sources.append('verified')
+    elif pyb_xwoba is not None and result.get('xwoba') is None:
+        result['xwoba'] = pyb_xwoba
+        sources.append('pyb-xwoba-fill')
+
     result['fetch_status'] = 'ok'
     result['data_source'] = '+'.join(sources)
 
@@ -1778,7 +1823,7 @@ def compute_platoon(batter_hand, pitcher_hand):
     return 'SAME'
 
 
-def build_context_str(parsed, all_statcast):
+def build_context_str(parsed, all_statcast, pen_era=None):
     home = parsed.get('home_team', 'HOME')
     away = parsed.get('away_team', 'AWAY')
     park = parsed.get('park_name', '?')
@@ -1873,11 +1918,109 @@ def build_context_str(parsed, all_statcast):
     lines.append('Running HOT (negative gap) = FADE for HR only. It does NOT suppress hit probability.')
     lines.append('Top hit picks should include the highest wOBA batters regardless of gap direction.')
 
+    # Add bullpen ERA data
+    if pen_era:
+        lines.append('')
+        lines.append('BULLPEN ERA (current season):')
+        for team, data in pen_era.items():
+            era = data.get('era')
+            tier = data.get('tier', 'UNKNOWN')
+            era_str = f"{era:.2f}" if era is not None else "N/A"
+            flag = " ⚠ WEAK PEN (ERA>=5.50 — upgrades #1 and #5 may apply)" if tier == 'WEAK' else ""
+            lines.append(f"  {team.upper()}: ERA={era_str} [{tier}]{flag}")
+
     return '\n'.join(lines)
 
 
 
 # ─── BACKGROUND JOB ───────────────────────────────────────────────────────────
+
+# ─── BULLPEN ERA FETCH ────────────────────────────────────────────────────────
+# Uses MLB Stats API to get current season bullpen ERA per team
+# Called during run_job to populate pen ERA for upgrades #1 and #5
+
+_TEAM_NAME_TO_ID = {
+    'angels': 108, 'astros': 117, 'athletics': 133, 'blue jays': 141,
+    'braves': 144, 'brewers': 158, 'cardinals': 138, 'cubs': 112,
+    'diamondbacks': 109, 'dodgers': 119, 'giants': 137, 'guardians': 114,
+    'mariners': 136, 'marlins': 146, 'mets': 121, 'nationals': 120,
+    'orioles': 110, 'padres': 135, 'phillies': 143, 'pirates': 134,
+    'rangers': 140, 'rays': 139, 'red sox': 111, 'reds': 113,
+    'rockies': 115, 'royals': 118, 'tigers': 116, 'twins': 142,
+    'white sox': 145, 'yankees': 147, 'cubs': 112, 'athletics': 133,
+}
+
+
+def get_team_id(team_name):
+    """Get MLB team ID from team name."""
+    name = normalize_name(team_name).lower()
+    for k, v in _TEAM_NAME_TO_ID.items():
+        if k in name or name in k:
+            return v
+    return None
+
+
+def fetch_bullpen_era(team_name):
+    """
+    Fetch current season bullpen ERA for a team via MLB Stats API.
+    Returns dict: {era, il_count, tier}
+    """
+    result = {'era': None, 'il_count': 0, 'tier': 'UNKNOWN'}
+    team_id = get_team_id(team_name)
+    if not team_id:
+        return result
+
+    try:
+        url = (f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats'
+               f'?stats=season&group=pitching&season={CURRENT_YEAR}&gameType=R')
+        req = urllib.request.Request(url, headers=_HEADERS)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+
+        splits = data.get('stats', [{}])[0].get('splits', [])
+        # Find relief pitchers (not starters)
+        relief_era_list = []
+        for split in splits:
+            stat = split.get('stat', {})
+            pos = split.get('position', {}).get('abbreviation', '')
+            # Skip if this is a starter-only split
+            era = safe_float(stat.get('era'))
+            ip = safe_float(stat.get('inningsPitched', 0))
+            if era is not None and ip and ip > 0:
+                relief_era_list.append(era)
+
+        if relief_era_list:
+            result['era'] = round(sum(relief_era_list) / len(relief_era_list), 2)
+    except Exception:
+        pass
+
+    # Try simpler team ERA endpoint if above fails
+    if result['era'] is None:
+        try:
+            url2 = (f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats'
+                    f'?stats=season&group=pitching&season={CURRENT_YEAR}')
+            req2 = urllib.request.Request(url2, headers=_HEADERS)
+            with urllib.request.urlopen(req2, timeout=10) as r2:
+                data2 = json.loads(r2.read())
+            splits2 = data2.get('stats', [{}])[0].get('splits', [])
+            if splits2:
+                era = safe_float(splits2[0].get('stat', {}).get('era'))
+                if era is not None:
+                    result['era'] = era
+        except Exception:
+            pass
+
+    # Set tier
+    if result['era'] is not None:
+        if result['era'] >= 5.50:
+            result['tier'] = 'WEAK'
+        elif result['era'] >= 4.50:
+            result['tier'] = 'AVERAGE'
+        else:
+            result['tier'] = 'SOLID'
+
+    return result
+
 def run_job(jid, sid, raw_lineup, game_date=None):
     with store_lock:
         jobs[jid]['status'] = 'running'
