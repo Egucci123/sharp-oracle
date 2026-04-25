@@ -1109,7 +1109,9 @@ def fetch_from_player_page(player_id, player_name=None):
         stats['xwoba']         = safe_float(m.group(4))
         stats['barrel_pct']    = safe_float(m.group(5))
 
-    # SECONDARY: scan JSON blobs for extra fields (EV50, SS%, FB%)
+    # SECONDARY: scan JSON blobs for FB%, xSLG and other extras
+    # Confirmed blob keys from page-debug: fb_percent, xslg, hard_hit_bip_percent,
+    # avg_ev (EV), brl_bip_percent (barrel%). EV50/SS% not in page HTML at all.
     for blob in re.findall(r'(\[{.+?}\])', html, re.DOTALL):
         try:
             arr = json.loads(blob)
@@ -1119,6 +1121,9 @@ def fetch_from_player_page(player_id, player_name=None):
             year_val = str(row.get('year', row.get('season', row.get('game_year', ''))))
             if year_val and year_val not in ('2026', ''):
                 continue
+            # Skip blobs that don't have useful stat fields
+            if 'fb_percent' not in row and 'xwoba' not in row and 'avg_ev' not in row:
+                continue
             def g(*keys):
                 for k in keys:
                     v = row.get(k)
@@ -1127,30 +1132,32 @@ def fetch_from_player_page(player_id, player_name=None):
                         if f is not None:
                             return f
                 return None
+            # Only fill fields summary line missed
             if stats['exit_velocity'] is None:
-                stats['exit_velocity'] = g('avg_hit_speed')
+                stats['exit_velocity'] = g('avg_ev', 'avg_hit_speed')
             if stats['hard_hit_pct'] is None:
-                stats['hard_hit_pct'] = g('ev95percent', 'hard_hit_percent')
+                stats['hard_hit_pct'] = g('hard_hit_bip_percent', 'ev95percent', 'hard_hit_percent')
             if stats['barrel_pct'] is None:
-                stats['barrel_pct'] = g('brl_percent', 'barrel_batted_rate')
-            if stats['ev50'] is None:
-                stats['ev50'] = g('avg_best_speed', 'ev50')
-            if stats['sweet_spot_pct'] is None:
-                stats['sweet_spot_pct'] = g('anglesweetspotpercent', 'sweet_spot_percent')
+                stats['barrel_pct'] = g('brl_bip_percent', 'brl_percent', 'barrel_batted_rate')
             if stats['fb_pct'] is None:
                 stats['fb_pct'] = g('fb_percent', 'flyball_percent')
+            if stats['xslg'] is None:
+                stats['xslg'] = g('xslg', 'est_slg')
+            if stats['xwoba'] is None:
+                stats['xwoba'] = g('xwoba', 'est_woba')
+            if stats['woba'] is None:
+                stats['woba'] = g('woba')
         except Exception:
             continue
 
-    # TERTIARY: regex key-value scan for any remaining fields
+    # TERTIARY: regex key-value scan — confirmed key names from page-debug
     kv_map = [
-        ('exit_velocity',  [r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?']),
-        ('hard_hit_pct',   [r'"ev95percent"\s*:\s*"?([\d.]+)"?', r'"hard_hit_percent"\s*:\s*"?([\d.]+)"?']),
-        ('barrel_pct',     [r'"brl_percent"\s*:\s*"?([\d.]+)"?', r'"barrel_batted_rate"\s*:\s*"?([\d.]+)"?']),
-        ('ev50',           [r'"avg_best_speed"\s*:\s*"?([\d.]+)"?']),
-        ('sweet_spot_pct', [r'"anglesweetspotpercent"\s*:\s*"?([\d.]+)"?', r'"sweet_spot_percent"\s*:\s*"?([\d.]+)"?']),
+        ('exit_velocity',  [r'"avg_ev"\s*:\s*"?([\d.]+)"?', r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?']),
+        ('hard_hit_pct',   [r'"hard_hit_bip_percent"\s*:\s*"?([\d.]+)"?', r'"ev95percent"\s*:\s*"?([\d.]+)"?']),
+        ('barrel_pct',     [r'"brl_bip_percent"\s*:\s*"?([\d.]+)"?', r'"brl_percent"\s*:\s*"?([\d.]+)"?']),
         ('fb_pct',         [r'"fb_percent"\s*:\s*"?([\d.]+)"?', r'"flyball_percent"\s*:\s*"?([\d.]+)"?']),
-        ('xslg',           [r'"est_slg"\s*:\s*"?([\d.]+)"?', r'"xslg"\s*:\s*"?([\d.]+)"?']),
+        ('xslg',           [r'"xslg"\s*:\s*"?([\d.]+)"?', r'"est_slg"\s*:\s*"?([\d.]+)"?']),
+        ('xwoba',          [r'"xwoba"\s*:\s*"?([\d.]+)"?', r'"est_woba"\s*:\s*"?([\d.]+)"?']),
     ]
     for stat, pats in kv_map:
         if stats.get(stat) is not None:
