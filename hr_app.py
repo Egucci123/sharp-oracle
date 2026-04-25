@@ -1063,11 +1063,9 @@ def _extract_leaderboard_row(row):
 
 def fetch_from_player_page(player_id, player_name=None):
     """
-    Fetch player Statcast stats via direct Savant JSON endpoints.
-    No HTML scraping — pure JSON API calls with cache-busting timestamps.
-    Source A: /leaderboard/expected_statistics -> xwOBA, xSLG, wOBA
-    Source B: /leaderboard/statcast           -> EV, HH%, Barrel%, EV50, SS%
-    Source C: /leaderboard/batted-ball        -> FB%
+    Fetch EV, HH%, Barrel% from Savant player page HTML summary line.
+    This is the only Savant endpoint that works from Railway for per-player data.
+    xwOBA/xSLG/wOBA come from pybaseball expected_stats (handled in fetch_one_player).
     """
     pid = str(player_id)
     stats = {
@@ -1076,63 +1074,92 @@ def fetch_from_player_page(player_id, player_name=None):
         'sweet_spot_pct': None, 'ev50': None, 'fb_pct': None,
     }
 
-    def g(row, *keys):
-        for k in keys:
-            v = row.get(k)
-            if v not in (None, '', 'null', 'None', 'NaN'):
-                f = safe_float(v)
-                if f is not None:
-                    return f
+    # Try numeric ID URL with year param — forces 2026 stats
+    urls = [
+        f'https://baseballsavant.mlb.com/savant-player/{pid}?stats=statcast-r-hitting-mlb&season={CURRENT_YEAR}',
+        f'https://baseballsavant.mlb.com/savant-player/{pid}',
+    ]
+    if player_name:
+        slug = normalize_name(player_name).lower().replace(' ', '-')
+        urls.insert(0, f'https://baseballsavant.mlb.com/savant-player/{slug}-{pid}?season={CURRENT_YEAR}')
+
+    html = None
+    for url in urls:
+        html = savant_get(url)
+        if html and len(html) > 5000:
+            break
+
+    if not html:
         return None
 
-    def fetch_json(url):
-        raw = savant_get(url, accept_json=True)
-        if not raw:
-            return None
+    # PRIMARY: extract from "(2026) Avg Exit Velocity: X, Hard Hit %: X..." summary line
+    # This is server-side rendered and most reliable
+    m = re.search(
+        r'\(2026\)\s*Avg\s*Exit\s*Vel[a-z]*:\s*([\d.]+)[,\s]*'
+        r'Hard\s*Hit\s*%:\s*([\d.]+)[,\s]*'
+        r'wOBA:\s*([.\d]+)[,\s]*'
+        r'xwOBA:\s*([.\d]+)[,\s]*'
+        r'Barrel\s*%:\s*([\d.]+)',
+        html, re.I
+    )
+    if m:
+        stats['exit_velocity'] = safe_float(m.group(1))
+        stats['hard_hit_pct']  = safe_float(m.group(2))
+        stats['woba']          = safe_float(m.group(3))
+        stats['xwoba']         = safe_float(m.group(4))
+        stats['barrel_pct']    = safe_float(m.group(5))
+
+    # SECONDARY: scan JSON blobs for extra fields (EV50, SS%, FB%)
+    for blob in re.findall(r'(\[{.+?}\])', html, re.DOTALL):
         try:
-            data = json.loads(raw)
-            rows = data if isinstance(data, list) else data.get('data', [])
-            if not rows:
+            arr = json.loads(blob)
+            if not (isinstance(arr, list) and arr and isinstance(arr[0], dict)):
+                continue
+            row = arr[0]
+            year_val = str(row.get('year', row.get('season', row.get('game_year', ''))))
+            if year_val and year_val not in ('2026', ''):
+                continue
+            def g(*keys):
+                for k in keys:
+                    v = row.get(k)
+                    if v not in (None, '', 'null', 'None'):
+                        f = safe_float(v)
+                        if f is not None:
+                            return f
                 return None
-            for row in rows:
-                rid = str(row.get('player_id') or row.get('batter') or row.get('pitcher') or '')
-                if rid == pid:
-                    return row
-            if len(rows) == 1:
-                return rows[0]
-            return None
+            if stats['exit_velocity'] is None:
+                stats['exit_velocity'] = g('avg_hit_speed')
+            if stats['hard_hit_pct'] is None:
+                stats['hard_hit_pct'] = g('ev95percent', 'hard_hit_percent')
+            if stats['barrel_pct'] is None:
+                stats['barrel_pct'] = g('brl_percent', 'barrel_batted_rate')
+            if stats['ev50'] is None:
+                stats['ev50'] = g('avg_best_speed', 'ev50')
+            if stats['sweet_spot_pct'] is None:
+                stats['sweet_spot_pct'] = g('anglesweetspotpercent', 'sweet_spot_percent')
+            if stats['fb_pct'] is None:
+                stats['fb_pct'] = g('fb_percent', 'flyball_percent')
         except Exception:
-            return None
+            continue
 
-    # Source A: expected_statistics
-    row_a = fetch_json(
-        f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
-        f'?type=batter&year={CURRENT_YEAR}&player_id={pid}&min=0'
-    )
-    if row_a:
-        stats['xwoba'] = g(row_a, 'est_woba', 'xwoba')
-        stats['woba']  = g(row_a, 'woba')
-        stats['xslg']  = g(row_a, 'est_slg', 'xslg')
-
-    # Source B: statcast leaderboard
-    row_b = fetch_json(
-        f'https://baseballsavant.mlb.com/leaderboard/statcast'
-        f'?type=batter&year={CURRENT_YEAR}&player_id={pid}&min=0'
-    )
-    if row_b:
-        stats['exit_velocity']  = g(row_b, 'avg_hit_speed')
-        stats['hard_hit_pct']   = g(row_b, 'ev95percent', 'hard_hit_percent')
-        stats['barrel_pct']     = g(row_b, 'brl_percent', 'barrel_batted_rate')
-        stats['ev50']           = g(row_b, 'avg_best_speed', 'ev50')
-        stats['sweet_spot_pct'] = g(row_b, 'anglesweetspotpercent', 'sweet_spot_percent')
-
-    # Source C: batted-ball for FB%
-    row_c = fetch_json(
-        f'https://baseballsavant.mlb.com/leaderboard/batted-ball'
-        f'?type=batter&year={CURRENT_YEAR}&player_id={pid}'
-    )
-    if row_c:
-        stats['fb_pct'] = g(row_c, 'fb_percent', 'flyball_percent', 'fly_ball_percent')
+    # TERTIARY: regex key-value scan for any remaining fields
+    kv_map = [
+        ('exit_velocity',  [r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?']),
+        ('hard_hit_pct',   [r'"ev95percent"\s*:\s*"?([\d.]+)"?', r'"hard_hit_percent"\s*:\s*"?([\d.]+)"?']),
+        ('barrel_pct',     [r'"brl_percent"\s*:\s*"?([\d.]+)"?', r'"barrel_batted_rate"\s*:\s*"?([\d.]+)"?']),
+        ('ev50',           [r'"avg_best_speed"\s*:\s*"?([\d.]+)"?']),
+        ('sweet_spot_pct', [r'"anglesweetspotpercent"\s*:\s*"?([\d.]+)"?', r'"sweet_spot_percent"\s*:\s*"?([\d.]+)"?']),
+        ('fb_pct',         [r'"fb_percent"\s*:\s*"?([\d.]+)"?', r'"flyball_percent"\s*:\s*"?([\d.]+)"?']),
+        ('xslg',           [r'"est_slg"\s*:\s*"?([\d.]+)"?', r'"xslg"\s*:\s*"?([\d.]+)"?']),
+    ]
+    for stat, pats in kv_map:
+        if stats.get(stat) is not None:
+            continue
+        for pat in pats:
+            hit = re.search(pat, html, re.I)
+            if hit:
+                stats[stat] = safe_float(hit.group(1))
+                break
 
     return stats if any(v is not None for v in stats.values()) else None
 
