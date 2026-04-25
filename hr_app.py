@@ -587,8 +587,54 @@ KNOWN_PLAYER_IDS = {
     'jonathan aranda': '666018',    # savant-player/jonathan-aranda-666018
     'taylor walls': '657757',       # confirmed from Baseball Cube
     'royce lewis': '668904',
-    'trevor story': '596115',       # long-tenured player
+    'trevor story': '596115',
     'pete alonso': '624413',
+    # 2026-04-25 verified from Savant URLs
+    'mitch garver': '641598',       # savant-player/mitch-garver-641598
+    'will wilson': '683737',        # savant-player/will-wilson-683737
+    'jordan walker': '691023',      # savant-player/jordan-walker-691023
+    'alec burleson': '676475',      # savant-player/alec-burleson-676475
+    'ivan herrera': '671056',       # savant-player/ivan-herrera-671056
+    'ivan herrera': '671056',
+    'julio rodriguez': '677594',    # savant-player/julio-rodriguez-677594
+    'julio rodríguez': '677594',
+    'bryan woo': '693433',          # savant-player/bryan-woo-693433
+    'randy arozarena': '668227',    # savant-player/randy-arozarena-668227
+    'matthew liberatore': '669461', # savant-player/matthew-liberatore-669461
+    'cal raleigh': '663728',        # savant-player/cal-raleigh-663728
+    'masyn winn': '694786',         # savant-player/masyn-winn-694786
+    'jp crawford': '641487',        # savant-player/jp-crawford-641487
+    'j.p. crawford': '641487',
+    'josh naylor': '647304',        # savant-player/josh-naylor-647304
+    'victor scott ii': '694654',    # savant-player/victor-scott-ii-694654
+    # 2026-04-25 additional verified IDs
+    'rhys hoskins': '543333',        # savant-player/rhys-hoskins-543333
+    'juan brito': '701538',          # savant-player/juan-brito-701538
+    'kazuma okamoto': '672960',      # savant-player/kazuma-okamoto-672960
+    'kevin gausman': '592332',       # savant-player/kevin-gausman-592332
+    'joey cantillo': '676282',       # savant-player/joey-cantillo-676282
+    'myles straw': '668678',         # savant-player/myles-straw-668678
+    'davis schneider': '676896',     # savant-player/davis-schneider-676896
+    'eloy jimenez': '650391',        # savant-player/eloy-jimenez-650391
+    'eloy jiménez': '650391',
+    'daulton varsho': '662139',      # savant-player/daulton-varsho-662139
+    'david fry': '681867',           # savant-player/david-fry-681867
+    'ernie clement': '676801',       # savant-player/ernie-clement-676801
+    'steven kwan': '680757',         # savant-player/steven-kwan-680757
+    'angel martinez': '677651',      # savant-player/angel-martinez-677651
+    'ángel martínez': '677651',
+    'brayan rocchio': '672523',      # savant-player/brayan-rocchio-672523
+    'jj wetherholt': '694192',       # savant-player/jj-wetherholt-694192
+    'masyn winn': '694786',
+    'victor scott ii': '694654',
+    # 2026-04-25 fixes — confirmed from Savant URLs
+    'ryan jeffers': '680777',        # was missing — savant-player/ryan-jeffers-680777
+    'shane mcclanahan': '663556',    # savant-player/shane-mcclanahan-663556
+    'bailey ober': '641927',         # savant-player/bailey-ober-641927
+    'jake fraley': '642378',         # savant-player/jake-fraley-642378
+    'josh bell': '605137',           # savant-player/josh-bell-605137
+    'richie palacios': '676939',     # savant-player/richie-palacios-676939
+    'luke keaschall': '701444',      # savant-player/luke-keaschall-701444
 }
 
 
