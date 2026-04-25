@@ -1373,35 +1373,40 @@ def fetch_one_player(info):
         return result
 
     # All stats already sanity-checked during extraction above
-    # Cross-check: compare pybaseball xwOBA vs Savant JSON xwOBA
-    # If they disagree by more than 0.020, flag it and prefer pybaseball (confirmed exact)
-    pyb_xwoba = None
-    if PYBASEBALL_OK and pid:
+    # Fill missing fields from pybaseball expected_stats
+    # Only use pybaseball as a FILL when page scrape returned nothing
+    # Do NOT override page scrape — page scrape hits the live player page which is more current
+    if PYBASEBALL_OK and pid and ptype == 'batter':
         with _pyb_lock:
-            cache = _pyb_batter_cache if ptype == 'batter' else _pyb_pitcher_cache
+            cache = _pyb_batter_cache
         if cache is not None:
             ex_df = cache.get('ex')
             if ex_df is not None and not ex_df.empty:
                 rows_ex = ex_df[ex_df['player_id'] == str(pid)]
                 if not rows_ex.empty:
-                    try:
-                        v = float(rows_ex.iloc[0]['est_woba'])
-                        if v == v:
-                            pyb_xwoba = round(v, 3)
-                    except Exception:
-                        pass
-
-    if pyb_xwoba is not None and result.get('xwoba') is not None:
-        diff = abs(pyb_xwoba - result['xwoba'])
-        if diff > 0.020:
-            # Significant disagreement — prefer pybaseball (confirmed exact from MLBAM ID)
-            result['xwoba'] = pyb_xwoba
-            sources.append('pyb-xwoba-override')
-        else:
-            sources.append('verified')
-    elif pyb_xwoba is not None and result.get('xwoba') is None:
-        result['xwoba'] = pyb_xwoba
-        sources.append('pyb-xwoba-fill')
+                    row_ex = rows_ex.iloc[0]
+                    def pyb_get(col):
+                        try:
+                            v = float(row_ex[col])
+                            return round(v, 3) if v == v else None
+                        except Exception:
+                            return None
+                    # Only fill fields that page scrape missed entirely
+                    if result.get('xwoba') is None:
+                        v = pyb_get('est_woba')
+                        if v is not None:
+                            result['xwoba'] = v
+                            sources.append('pyb-fill-xwoba')
+                    if result.get('xslg') is None:
+                        v = pyb_get('est_slg')
+                        if v is not None:
+                            result['xslg'] = v
+                            sources.append('pyb-fill-xslg')
+                    if result.get('woba') is None:
+                        v = pyb_get('woba')
+                        if v is not None:
+                            result['woba'] = v
+                            sources.append('pyb-fill-woba')
 
     result['fetch_status'] = 'ok'
     result['data_source'] = '+'.join(sources)
@@ -2731,6 +2736,63 @@ class Handler(BaseHTTPRequestHandler):
                     'pybaseball_ok': PYBASEBALL_OK,
                     'requested': {'name': name, 'pid': pid_final},
                     'known_player_tests': {k: {'expected': v[0], 'got': v[1], 'match': v[0]==v[1] or v[0]=='?'} for k,v in tests.items()},
+                })
+            except Exception as ex:
+                import traceback
+                self._json({'error': str(ex), 'trace': traceback.format_exc()})
+
+        elif path == '/api/page-debug':
+            # Dumps what the page scrape actually finds for a player
+            try:
+                from urllib.parse import parse_qs
+                qs = parse_qs(urlparse(self.path).query)
+                pid = qs.get('pid', ['545361'])[0]  # default: Mike Trout
+                html = savant_get(
+                    f'https://baseballsavant.mlb.com/savant-player/{pid}?stats=statcast-r-hitting-mlb&season={CURRENT_YEAR}'
+                )
+                if not html:
+                    self._json({'error': 'no html returned'})
+                    return
+                # Find all JSON blobs and extract keys
+                import re
+                blobs_found = []
+                for blob in re.findall(r'(\[{.+?}\])', html, re.DOTALL):
+                    try:
+                        arr = json.loads(blob)
+                        if isinstance(arr, list) and arr and isinstance(arr[0], dict):
+                            row = arr[0]
+                            year_val = str(row.get('year', row.get('season', row.get('game_year', ''))))
+                            blobs_found.append({
+                                'year': year_val,
+                                'keys': sorted(row.keys()),
+                                'ev50_val': row.get('avg_best_speed') or row.get('ev50'),
+                                'ss_val': row.get('anglesweetspotpercent') or row.get('sweet_spot_percent'),
+                                'fb_val': row.get('fb_percent') or row.get('flyball_percent'),
+                                'ev_val': row.get('avg_hit_speed'),
+                                'hh_val': row.get('ev95percent') or row.get('hard_hit_percent'),
+                                'brl_val': row.get('brl_percent') or row.get('barrel_batted_rate'),
+                            })
+                    except Exception:
+                        pass
+                # Also check summary line
+                m = re.search(
+                    r'\(2026\)\s*Avg\s*Exit\s*Vel[a-z]*:\s*([\d.]+)[,\s]*'
+                    r'Hard\s*Hit\s*%:\s*([\d.]+)[,\s]*'
+                    r'wOBA:\s*([.\d]+)[,\s]*'
+                    r'xwOBA:\s*([.\d]+)[,\s]*'
+                    r'Barrel\s*%:\s*([\d.]+)',
+                    html, re.I
+                )
+                self._json({
+                    'pid': pid,
+                    'html_length': len(html),
+                    'summary_line_found': bool(m),
+                    'summary_values': {
+                        'ev': m.group(1), 'hh': m.group(2),
+                        'woba': m.group(3), 'xwoba': m.group(4), 'brl': m.group(5)
+                    } if m else {},
+                    'blobs_with_2026': [b for b in blobs_found if b['year'] in ('2026', '')],
+                    'all_blob_years': [b['year'] for b in blobs_found],
                 })
             except Exception as ex:
                 import traceback
