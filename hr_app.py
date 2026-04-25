@@ -27,7 +27,6 @@ try:
         statcast_batter_expected_stats,
         statcast_pitcher_exitvelo_barrels,
         statcast_pitcher_expected_stats,
-        playerid_lookup,
     )
     import pybaseball
     pybaseball.cache.disable()  # Always pull fresh — no stale disk cache
@@ -693,29 +692,9 @@ def get_player_id(name):
     if key in KNOWN_PLAYER_IDS:
         return KNOWN_PLAYER_IDS[key]
 
-    # 2. pybaseball playerid_lookup — covers every MLB player by name
-    # Wrapped in 8s timeout — lookup downloads a CSV on first call which can block
-    if PYBASEBALL_OK:
-        try:
-            import concurrent.futures
-            parts = key.split()
-            if len(parts) >= 2:
-                last, first = parts[-1], parts[0]
-                def do_lookup():
-                    r = playerid_lookup(last, first)
-                    if r is not None and not r.empty:
-                        played = r[r['mlb_played_first'].notna()]
-                        if played.empty:
-                            played = r
-                        pid = str(int(played.sort_values('mlb_played_last', ascending=False).iloc[0]['key_mlbam']))
-                        return pid if pid and pid != 'nan' else None
-                    return None
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                    pid = ex.submit(do_lookup).result(timeout=8)
-                if pid:
-                    return pid
-        except Exception:
-            pass
+    # 2. pybaseball playerid_lookup DISABLED
+    # Downloads a CSV on every unique name lookup — crashes server when 18 players
+    # are fetched in parallel. Rely on KNOWN_PLAYER_IDS + MLB Stats API cache instead.
 
     # 3. MLB Stats API cache fallback
     cache = _load_mlb_player_cache()
