@@ -1370,55 +1370,43 @@ def get_team_id(team_name):
 
 def fetch_bullpen_era(team_name):
     """
-    Fetch current season bullpen ERA for a team via MLB Stats API.
-    Returns dict: {era, il_count, tier}
+    Fetch current season team pitching ERA via MLB Stats API.
+    Uses the team totals endpoint — returns overall pitching ERA as proxy for pen quality.
+    Returns dict: {era, tier}
     """
     result = {'era': None, 'il_count': 0, 'tier': 'UNKNOWN'}
     team_id = get_team_id(team_name)
     if not team_id:
         return result
 
-    try:
-        url = (f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats'
-               f'?stats=season&group=pitching&season={CURRENT_YEAR}&gameType=R')
-        req = urllib.request.Request(url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read())
+    # MLB Stats API team stats — pitching group, season totals
+    urls = [
+        (f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats'
+         f'?stats=season&group=pitching&season={CURRENT_YEAR}&gameType=R'),
+        (f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats'
+         f'?stats=season&group=pitching&season={CURRENT_YEAR}'),
+    ]
 
-        splits = data.get('stats', [{}])[0].get('splits', [])
-        # Find relief pitchers (not starters)
-        relief_era_list = []
-        for split in splits:
-            stat = split.get('stat', {})
-            pos = split.get('position', {}).get('abbreviation', '')
-            # Skip if this is a starter-only split
-            era = safe_float(stat.get('era'))
-            ip = safe_float(stat.get('inningsPitched', 0))
-            if era is not None and ip and ip > 0:
-                relief_era_list.append(era)
-
-        if relief_era_list:
-            result['era'] = round(sum(relief_era_list) / len(relief_era_list), 2)
-    except Exception:
-        pass
-
-    # Try simpler team ERA endpoint if above fails
-    if result['era'] is None:
+    for url in urls:
         try:
-            url2 = (f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats'
-                    f'?stats=season&group=pitching&season={CURRENT_YEAR}')
-            req2 = urllib.request.Request(url2, headers=_HEADERS)
-            with urllib.request.urlopen(req2, timeout=10) as r2:
-                data2 = json.loads(r2.read())
-            splits2 = data2.get('stats', [{}])[0].get('splits', [])
-            if splits2:
-                era = safe_float(splits2[0].get('stat', {}).get('era'))
-                if era is not None:
-                    result['era'] = era
+            req = urllib.request.Request(url, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read())
+            # MLB Stats API returns stats[0].splits[0].stat.era for team totals
+            stats = data.get('stats', [])
+            for stat_group in stats:
+                splits = stat_group.get('splits', [])
+                if splits:
+                    era_str = splits[0].get('stat', {}).get('era', '')
+                    era = safe_float(era_str)
+                    if era is not None and 0 < era < 20:
+                        result['era'] = round(era, 2)
+                        break
+            if result['era'] is not None:
+                break
         except Exception:
-            pass
+            continue
 
-    # Set tier
     if result['era'] is not None:
         if result['era'] >= 5.50:
             result['tier'] = 'WEAK'
