@@ -197,6 +197,11 @@ def clear_leaderboard_cache():
     pass
 
 
+def _load_leaderboard(player_type='batter'):
+    """Deprecated — leaderboard endpoints blocked from Railway. Returns empty list."""
+    return []
+
+
 PYBASEBALL_OK = False
 _pyb_batter_cache = None
 _pyb_pitcher_cache = None
@@ -498,72 +503,8 @@ def get_player_id(name):
 
 
 def lookup_player_in_leaderboard(name, player_type='batter'):
-    """Find player stats directly from leaderboard by name matching.
-    Also enriches with xSLG and SS% from the statcast leaderboard."""
-    # Use get_player_id() — checks KNOWN_PLAYER_IDS then full MLB Stats API cache
-    forced_pid = get_player_id(name)
-
-    rows = _load_leaderboard(player_type)
-
-    best_score = 0
-    best_row = None
-
-    for row in rows:
-        row_pid = str(row.get('player_id') or row.get('batter') or row.get('pitcher') or '')
-        # If we have a known ID, ONLY match that exact row — ignore all name matching
-        if forced_pid:
-            if row_pid == forced_pid:
-                best_row = row
-                best_score = 100
-                break
-            continue
-        score = _name_match_score(row, name)
-        if score > best_score:
-            best_score = score
-            best_row = row
-
-    if best_score < 2 or best_row is None:
-        # Bulk leaderboard failed — use known PID and let fetch_one_player try individual fetch
-        if forced_pid:
-            return forced_pid, None
-        return None, None
-
-    pid = str(best_row.get('player_id') or best_row.get('batter') or best_row.get('pitcher') or '') or forced_pid or ''
-    stats = _extract_leaderboard_row(best_row)
-
-    # Enrich with xSLG and SS% from statcast leaderboard (different endpoint)
-    if player_type == 'batter' and pid:
-        sc_rows = _load_statcast_cache()
-        for sc_row in sc_rows:
-            sc_pid = str(sc_row.get('player_id') or sc_row.get('batter') or '')
-            if sc_pid == pid:
-                def g(*keys):
-                    for k in keys:
-                        v = sc_row.get(k)
-                        if v not in (None, '', 'null', 'None'):
-                            f = safe_float(v)
-                            if f is not None:
-                                return f
-                    return None
-                xslg = g('xslg', 'est_slg', 'xslg_percent')
-                if xslg is not None: stats['xslg'] = xslg
-                break
-
-    return pid, stats
-
-
-# Sanity ranges — if a parsed value is outside these it's a bad parse, discard it
-SANE = {
-    'exit_velocity':  (50.0, 120.0),   # mph
-    'hard_hit_pct':   (0.0, 100.0),    # percent
-    'woba':           (0.050, 0.700),   # stat value
-    'xwoba':          (0.050, 0.700),
-    'barrel_pct':     (0.0, 60.0),     # percent
-    'xslg':           (0.050, 1.500),   # expected slugging
-    'sweet_spot_pct': (0.0, 100.0),    # launch angle sweet spot %
-    'gb_pct':         (0.0, 100.0),    # ground ball % (pitchers)
-    'csw_pct':        (0.0, 60.0),     # called strike + whiff %
-}  # end SANE
+    """Deprecated — leaderboard endpoints blocked from Railway. No-op."""
+    return None, {}
 
 
 def sane(stat, val):
@@ -1656,13 +1597,15 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         sess['game_data'] = parsed
         sess['statcast']  = all_statcast
 
-        # Fetch bullpen ERA for both teams
+        # Fetch bullpen ERA for both teams using correct parsed keys
         pen_era = {}
-        for team_name in [parsed.get('team1',''), parsed.get('team2','')]:
-            if team_name:
+        for team_name in [home, away]:
+            if team_name and team_name != '?':
                 pen_data = fetch_bullpen_era(team_name)
                 if pen_data.get('era') is not None:
                     pen_era[normalize_name(team_name).lower()] = pen_data
+        if pen_era:
+            print(f"[PEN ERA] {pen_era}")
 
         # S5 — full model
         step_set(jid, 5, 'active', 'Running model (all 14 upgrades)...')
