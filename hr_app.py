@@ -19,20 +19,7 @@ from urllib.parse import urlparse
 import urllib.request
 import urllib.error
 
-# ─── PYBASEBALL SETUP ─────────────────────────────────────────────────────────
-try:
-    import pandas as pd
-    from pybaseball import (
-        statcast_batter_exitvelo_barrels,
-        statcast_batter_expected_stats,
-        statcast_pitcher_exitvelo_barrels,
-        statcast_pitcher_expected_stats,
-    )
-    import pybaseball
-    pybaseball.cache.disable()  # Always pull fresh — no stale disk cache
-    PYBASEBALL_OK = True
-except ImportError:
-    PYBASEBALL_OK = False
+# Pybaseball removed — caused server crashes with parallel threads
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 import os
@@ -90,30 +77,22 @@ OUTPUT (always all 9):
 """
 
 SYSTEM_PROMPT = (
-    "You are Sharp Oracle — a 20-year MLB scout running a strict Statcast HR prop model. "
-    "Direct, peer-level, zero filler. "
-    "\n\nDATA RELIABILITY: All Statcast data in the block is live-fetched and current. "
-    "Fields provided: EV, HH%, Barrel%, xwOBA, wOBA, GAP, xSLG (where available). "
-    "NEVER substitute your training knowledge for the numbers given. "
-    "If a field shows N/A or [PROXY], note it and grade conservatively.\n"
-    "\nGAP = xwOBA minus wOBA. Positive gap = COLD (batter underperforming expected, buy regression). "
-    "Negative gap = HOT (batter overperforming, fade HR, strong hit candidate).\n"
-    "\nSTRICT OUTPUT FORMAT — follow exactly, no deviation:\n"
-    "S1: Pitcher table — name | team | gate score | gap | GB%/CSW% flags | one-line note. NO letter grades for pitchers.\n"
-    "S2: Full batter table — one row per batter. Columns: # | name | platoon | score | grade | gap | EV | xwOBA | Brl% | HH% | xSLG | wOBA | flags. NO notes column.\n"
-    "S3: Park and weather — one paragraph, apply model rules.\n"
-    "S4: Upgrade checks #1-#5 and #10-#14 — one line each. Format: #1 BULLPEN: [result] | #2 REG GAP: [result] etc.\n"
-    "S5: Formal picks — full reasoning per pick. Separate HR picks from hit picks.\n"
-    "S6: GUN-TO-HEAD TOP 2 HR ONLY. Exactly 2. No 3rd, no honorable mentions. 2 sentences max each.\n"
-    "S7: GUN-TO-HEAD TOP 2 HITS ONLY. Exactly 2. No 3rd, no honorable mentions. 2 sentences max each.\n"
-    "S8: HOLY GRAIL HR PARLAY — exactly 3 legs. ONLY if 2+ batters grade A or A-. "
-    "Otherwise: SKIP — insufficient A-grade legs.\n"
-    "S9: HOLY GRAIL HIT PARLAY — exactly 5 legs. Only cold-gap OR hot-gap with HIT-PICK-YES. "
-    "No fillers. If fewer than 5 qualify, use fewer and note why.\n"
-    "\nxSLG GRADING: When xSLG is available, use it to boost HR grade: "
-    "xSLG>=.600 + 3+/4 thresholds = upgrade half step. xSLG>=.500 = note as power tier.\n"
-    "\nBULLPEN ERA: When bullpen ERA data is provided, apply upgrades #1 and #5 rigorously. "
-    "ERA>=5.50 = WEAK pen = bullpen tier eligible for all Barrel>=15 + xwOBA>=.350 batters.\n"
+    "Sharp Oracle. 20-year MLB scout. Statcast HR prop model. Peer-level, zero filler.\n"
+    "\n"
+    "DATA: All stats are live-fetched. Use ONLY the numbers in the data block. "
+    "Never substitute training knowledge. [PROXY] = grade conservatively.\n"
+    "\n"
+    "OUTPUT — 9 sections, always all 9, in order:\n"
+    "S1: Pitchers — name | team | gate | gap | GB%/CSW% | one-line note. NO letter grades.\n"
+    "S2: Batter table — one row each, no notes column.\n"
+    "S3: Park + weather card.\n"
+    "S4: Upgrades #1-#5, #10-#14 — one line each.\n"
+    "S5: Formal picks with reasoning. HR picks separate from hit picks.\n"
+    "S6: TOP 2 HR. Exactly 2. 2 sentences max each.\n"
+    "S7: TOP 2 HITS. Exactly 2. 2 sentences max each.\n"
+    "S8: 3-leg HR parlay. ONLY if 2+ A/A- grades exist. Otherwise SKIP.\n"
+    "S9: 5-leg hit parlay. No fillers. Cold-gap or hot-gap HIT-PICK-YES only.\n"
+    "\n"
     + LOCKED_RULES
 )
 
@@ -215,427 +194,93 @@ _HEADERS = {
 }
 
 
-# ─── PYBASEBALL DATA LAYER ───────────────────────────────────────────────────
-# Pulls full 2026 season stats via pybaseball once per run.
-# Covers ALL players — no rate limiting, no blocking, correct data every time.
-# Falls back to Savant scrape if pybaseball unavailable.
 
-_pyb_batter_cache = None   # merged batter DataFrame (exitvelo + expected)
-_pyb_pitcher_cache = None  # merged pitcher DataFrame
-_pyb_lock = threading.Lock()
+def clear_leaderboard_cache():
+    """No-op — leaderboard caches removed."""
+    pass
+
+
+PYBASEBALL_OK = False
+_pyb_batter_cache = None
+_pyb_pitcher_cache = None
+_pyb_lock = __import__('threading').Lock()
 
 
 def _pull_pybaseball_data():
-    """Pull all 2026 batter and pitcher data via pybaseball. Store separately, no merge."""
-    global _pyb_batter_cache, _pyb_pitcher_cache
-    if not PYBASEBALL_OK:
-        return False
-    try:
-        # Store as dict of DataFrames keyed by type — no merging, look up per stat
-        b_ev = statcast_batter_exitvelo_barrels(2026, minBBE=1)
-        b_ev['player_id'] = b_ev['player_id'].astype(str)
-
-        b_ex = statcast_batter_expected_stats(2026, minPA=1)
-        b_ex['player_id'] = b_ex['player_id'].astype(str)
-
-        with _pyb_lock:
-            _pyb_batter_cache = {'ev': b_ev, 'ex': b_ex}
-
-        p_ev = statcast_pitcher_exitvelo_barrels(2026, minBBE=1)
-        p_ev['player_id'] = p_ev['player_id'].astype(str)
-
-        p_ex = statcast_pitcher_expected_stats(2026, minPA=1)
-        p_ex['player_id'] = p_ex['player_id'].astype(str)
-
-        with _pyb_lock:
-            _pyb_pitcher_cache = {'ev': p_ev, 'ex': p_ex}
-
-        return True
-    except Exception as e:
-        print(f"[pyb] ERROR: {e}")
-        import traceback; traceback.print_exc()
-        return False
+    """No-op — pybaseball removed."""
+    return False
 
 
-def _get_pyb_row(player_id, player_type='batter'):
-    """Get rows from both pybaseball DataFrames for a player."""
-    with _pyb_lock:
-        cache = _pyb_batter_cache if player_type == 'batter' else _pyb_pitcher_cache
-    if cache is None:
-        return None
-    pid = str(player_id)
-    ev_row = None
-    ex_row = None
-    ev_df = cache.get('ev')
-    ex_df = cache.get('ex')
-    if ev_df is not None and not ev_df.empty:
-        rows = ev_df[ev_df['player_id'] == pid]
-        if not rows.empty:
-            ev_row = rows.iloc[0]
-    if ex_df is not None and not ex_df.empty:
-        rows = ex_df[ex_df['player_id'] == pid]
-        if not rows.empty:
-            ex_row = rows.iloc[0]
-    if ev_row is None and ex_row is None:
-        return None
-    return {'ev': ev_row, 'ex': ex_row}
-
-
-def _extract_pyb_stats(rows, player_type='batter'):
-    """Extract stats from separate ev/ex pybaseball rows."""
-    if rows is None:
-        return None
-
-    def f(row, *cols):
-        if row is None:
-            return None
-        for c in cols:
-            if c in row.index:
-                v = row[c]
-                try:
-                    if pd.notna(v):
-                        fv = float(v)
-                        if fv == fv:  # not NaN
-                            return fv
-                except Exception:
-                    pass
-        return None
-
-    ev = rows.get('ev')
-    ex = rows.get('ex')
-
-    # CONFIRMED column names from pybaseball (verified via /api/pyb-debug):
-    # exitvelo_barrels: avg_hit_speed, ev50, anglesweetspotpercent, brl_percent,
-    #                   ev95percent (closest to HH%), fbld, gb
-    # expected_stats:   est_woba (=xwOBA), est_slg (=xSLG), woba
-
-    if player_type == 'batter':
-        return {
-            'exit_velocity':  f(ev, 'avg_hit_speed'),
-            'hard_hit_pct':   f(ev, 'ev95percent'),       # balls hit 95mph+ %
-            'barrel_pct':     f(ev, 'brl_percent'),
-            'xwoba':          f(ex, 'est_woba'),
-            'woba':           f(ex, 'woba'),
-            'xslg':           f(ex, 'est_slg'),
-        }
-    else:  # pitcher
-        return {
-            'exit_velocity':  f(ev, 'avg_hit_speed'),
-            'hard_hit_pct':   f(ev, 'ev95percent'),
-            'barrel_pct':     f(ev, 'brl_percent'),
-            'xwoba':          f(ex, 'est_woba'),
-            'woba':           f(ex, 'woba'),
-            'gb_pct':         None,  # Savant fallback
-            'csw_pct':        None,  # Savant fallback
-        }
-
-
-# ─── LEADERBOARD CACHE ────────────────────────────────────────────────────────
-# Pull the full 2026 leaderboard once and cache it for the session.
-# This avoids per-player search requests that Savant rate-limits aggressively.
-_leaderboard_cache = {'batter': None, 'pitcher': None}
-_statcast_cache = None       # batter xSLG + SS% data
-_batted_ball_cache = None    # pitcher GB% data
-_arsenal_cache = None        # pitcher CSW% data
-_cache_lock = threading.Lock()
-
-
-def clear_leaderboard_cache():
-    """Clear all caches so next run pulls fresh data."""
-    global _batted_ball_cache, _arsenal_cache, _statcast_cache, _pyb_batter_cache, _pyb_pitcher_cache
-    with _cache_lock:
-        _leaderboard_cache['batter'] = None
-        _leaderboard_cache['pitcher'] = None
-        _batted_ball_cache = None
-        _arsenal_cache = None
-        _statcast_cache = None
-    with _pyb_lock:
-        _pyb_batter_cache = None
-        _pyb_pitcher_cache = None
-
-
-def _load_leaderboard(player_type='batter'):
-    """Pull full 2026 leaderboard for batters or pitchers. Cached per job run."""
-    with _cache_lock:
-        if _leaderboard_cache[player_type] is not None:
-            return _leaderboard_cache[player_type]
-
-    url = (
-        f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
-        f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=0'
-    )
-    raw = savant_get(url, accept_json=True)
-    if not raw:
-        return []
-
-    try:
-        data = json.loads(raw)
-        rows = data if isinstance(data, list) else data.get('data', [])
-        with _cache_lock:
-            _leaderboard_cache[player_type] = rows
-        return rows
-    except Exception:
-        return []
-
-
-def _load_batted_ball_cache():
-    """Pull full 2026 pitcher batted-ball leaderboard (GB%) once and cache."""
-    global _batted_ball_cache
-    with _cache_lock:
-        if _batted_ball_cache is not None:
-            return _batted_ball_cache
-    url = (
-        f'https://baseballsavant.mlb.com/leaderboard/batted-ball'
-        f'?type=pitcher&year={CURRENT_YEAR}'
-    )
-    raw = savant_get(url, accept_json=True)
-    if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-        rows = data if isinstance(data, list) else data.get('data', [])
-        with _cache_lock:
-            _batted_ball_cache = rows
-        return rows
-    except Exception:
-        return []
-
-
-def _load_batter_batted_ball_cache():
-    """Pull full 2026 batter batted-ball leaderboard (FB%) once and cache."""
-    global _batter_batted_ball_cache
-    with _cache_lock:
-        if _batter_batted_ball_cache is not None:
-            return _batter_batted_ball_cache
-    url = (
-        f'https://baseballsavant.mlb.com/leaderboard/batted-ball'
-        f'?type=batter&year={CURRENT_YEAR}'
-    )
-    raw = savant_get(url, accept_json=True)
-    if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-        rows = data if isinstance(data, list) else data.get('data', [])
-        with _cache_lock:
-            _batter_batted_ball_cache = rows
-        return rows
-    except Exception:
-        return []
-
-
-def _load_arsenal_cache():
-    """Pull full 2026 pitcher arsenal leaderboard (CSW%) once and cache."""
-    global _arsenal_cache
-    with _cache_lock:
-        if _arsenal_cache is not None:
-            return _arsenal_cache
-    url = (
-        f'https://baseballsavant.mlb.com/leaderboard/pitch-arsenals'
-        f'?type=pitcher&year={CURRENT_YEAR}'
-    )
-    raw = savant_get(url, accept_json=True)
-    if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-        rows = data if isinstance(data, list) else data.get('data', [])
-        with _cache_lock:
-            _arsenal_cache = rows
-        return rows
-    except Exception:
-        return []
-
-
-def _load_statcast_cache():
-    """Pull full 2026 Statcast leaderboard (xSLG, SS%) once and cache."""
-    global _statcast_cache
-    with _cache_lock:
-        if _statcast_cache is not None:
-            return _statcast_cache
-    url = (
-        f'https://baseballsavant.mlb.com/leaderboard/statcast'
-        f'?type=batter&year={CURRENT_YEAR}&position=&team=&min=0'
-    )
-    raw = savant_get(url, accept_json=True)
-    if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-        rows = data if isinstance(data, list) else data.get('data', [])
-        with _cache_lock:
-            _statcast_cache = rows
-        return rows
-    except Exception:
-        return []
-
-
-def _name_match_score(row, target):
-    """Score a leaderboard row against a target name. Higher = better match."""
-    target = normalize_name(target).lower()
-    # Savant format varies: last_name+first_name fields OR combined name field
-    first = normalize_name(str(row.get('first_name', ''))).lower()
-    last  = normalize_name(str(row.get('last_name', ''))).lower()
-    # Also handle combined name field
-    combined = normalize_name(str(row.get('name', '') or row.get('player_name', ''))).lower()
-
-    full1 = f"{first} {last}".strip()
-    full2 = f"{last} {first}".strip()
-    full3 = f"{last}, {first}".strip()
-
-    candidates = [c for c in [full1, full2, full3, combined] if c.strip()]
-
-    if target in candidates:
-        return 100  # exact
-
-    # Check combined name field exact match
-    if combined and target == combined:
-        return 100
-
-    # Partial: count matching words against best candidate
-    parts = target.split()
-    best = 0
-    for cand in candidates:
-        score = sum(2 if p == last else 1 for p in parts if p in cand)
-        best = max(best, score)
-    return best
-
-
-# Known player IDs for players that commonly fail name matching
+# ─── KNOWN PLAYER IDS ────────────────────────────────────────────────────────
+# Hardcoded MLBAM IDs verified from baseballsavant.mlb.com/savant-player/name-ID URLs
+# These take priority over MLB Stats API cache — use when page scrape returns wrong player
 KNOWN_PLAYER_IDS = {
-    # Common accent/spelling variants
-    'jose ramirez': '608070',
-    'jose ramírez': '608070',
-    'christian vazquez': '477132',
-    'christian vázquez': '477132',
-    'j.d. martinez': '502110',
-    'jd martinez': '502110',
+    # Accent/spelling variants
+    'jose ramirez': '608070', 'jose ramírez': '608070',
+    'christian vazquez': '477132', 'christian vázquez': '477132',
+    'jd martinez': '502110', 'j.d. martinez': '502110',
     'michael a. taylor': '534606',
-    # Players confirmed returning wrong data from bulk leaderboard
-    'dane myers': '667472',
-    'jahmai jones': '663330',
-    'spencer steer': '668715',
-    # Common players with name collision risk
-    'elly de la cruz': '682829',   # confirmed from savant URL
-    'ke bryan hayes': '663647',
-    "ke'bryan hayes": '663647',
-    'sal stewart': '701398',   # confirmed from savant URL
-    'dillon dingler': '693307',   # confirmed from savant URL
-    'tyler stephenson': '661397',
-    'eugenio suarez': '553993',
-    'eugenio suárez': '553993',
-    'matt mclain': '680574',   # corrected ID
-    'riley greene': '682985',
-    'spencer torkelson': '679529',
-    'gleyber torres': '650402',
-    'javier baez': '595879',
-    'javier báez': '595879',
-    'kevin mcgonigle': '805808',   # corrected ID
+    # Confirmed wrong from bulk leaderboard
+    'dane myers': '667472', 'jahmai jones': '663330',
+    'spencer steer': '668715', 'elly de la cruz': '682829',
+    'matt mclain': '680574', 'kevin mcgonigle': '805808',
     'tyler stephenson': '663886',
-    'brice turang': '671218',
-    'william contreras': '661388',
-    'jake bauers': '664353',
-    'gary sanchez': '425794',
-    'gary sánchez': '425794',
-    'garrett mitchell': '669060',
-    'kerry carpenter': '681481',
-    'wenceel perez': '676080',
-    'wenceel pérez': '676080',
-    'jahmai jones': '663330',
-    # ── VERIFIED FROM SAVANT URLS 2026-04-24 ─────────────────────────────────
-    # Confirmed from baseballsavant.mlb.com/savant-player/name-ID URLs
-    'royce lewis': '668904',        # savant-player/royce-lewis-668904
-    'jonny deluca': '676356',       # savant-player/jonny-deluca-676356
-    'victor caratini': '605170',    # savant-player/victor-caratini-605170
-    'trevor larnach': '663616',     # savant-player/trevor-larnach-663616
-    'cedric mullins': '656775',     # savant-player/cedric-mullins-656775
-    'matt wallner': '670242',       # savant-player/matt-wallner-670242
-    'jonathan aranda': '666018',    # savant-player/jonathan-aranda-666018
-    'yandy diaz': '650490',         # savant-player/yandy-diaz-650490
-    'yandy díaz': '650490',
-    'brooks lee': '686797',         # savant-player/brooks-lee-686797
-    'drew rasmussen': '656876',     # savant-player/drew-rasmussen-656876
-    'taj bradley': '671737',        # savant-player/taj-bradley-671737
-    'byron buxton': '621439',       # savant-player/byron-buxton-621439
-    'junior caminero': '691406',    # savant-player/junior-caminero-691406
-    'brayan bello': '678394',       # savant-player/brayan-bello-678394
-    'adley rutschman': '668939',    # savant-player/adley-rutschman-668939
-    'wilyer abreu': '677800',       # savant-player/wilyer-abreu-677800
-    'pete alonso': '624413',        # savant-player/pete-alonso-624413
-    'masataka yoshida': '807799',   # savant-player/masataka-yoshida-807799
-    'jarren duran': '680776',       # savant-player/jarren-duran-680776
-    'ceddanne rafaela': '678882',   # savant-player/ceddanne-rafaela-678882
-    'junior caminero': '691406',    # savant-player/junior-caminero-691406
-    'gunnar henderson': '683002',   # savant-player/gunnar-henderson-683002
-    'taylor ward': '621493',        # savant-player/taylor-ward-621493
-    'leody taveras': '665750',      # savant-player/leody-taveras-665750
-    'gavin williams': '668909',     # savant-player/gavin-williams-668909
-    'max scherzer': '453286',       # savant-player/max-scherzer-453286
-    'andres gimenez': '665926',     # savant-player/andres-gimenez-665926
-    'andrés giménez': '665926',
-    'vladimir guerrero jr': '665489',  # savant-player/vladimir-guerrero-jr-665489
-    'vladimir guerrero jr.': '665489',
-    'chase delauter': '800050',     # savant-player/chase-delauter-800050
-    'jesus sanchez': '660821',      # savant-player/jesus-sanchez-660821
-    'jesús sánchez': '660821',
-    'bo naylor': '666310',          # savant-player/bo-naylor-666310
-    'bo naylor': '666310',
-    'josh naylor': '647304',        # savant-player/josh-naylor-647304
-    'rhys hoskins': '543333',       # savant-player/rhys-hoskins-543333
-    'willson contreras': '575929',  # savant-player/willson-contreras-575929 (BOS)
-    'jonathan aranda': '666018',    # savant-player/jonathan-aranda-666018
-    'taylor walls': '657757',       # confirmed from Baseball Cube
-    'royce lewis': '668904',
-    'trevor story': '596115',
-    'pete alonso': '624413',
-    # 2026-04-25 verified from Savant URLs
-    'mitch garver': '641598',       # savant-player/mitch-garver-641598
-    'will wilson': '683737',        # savant-player/will-wilson-683737
-    'jordan walker': '691023',      # savant-player/jordan-walker-691023
-    'alec burleson': '676475',      # savant-player/alec-burleson-676475
-    'ivan herrera': '671056',       # savant-player/ivan-herrera-671056
-    'ivan herrera': '671056',
-    'julio rodriguez': '677594',    # savant-player/julio-rodriguez-677594
-    'julio rodríguez': '677594',
-    'bryan woo': '693433',          # savant-player/bryan-woo-693433
-    'randy arozarena': '668227',    # savant-player/randy-arozarena-668227
-    'matthew liberatore': '669461', # savant-player/matthew-liberatore-669461
-    'cal raleigh': '663728',        # savant-player/cal-raleigh-663728
-    'masyn winn': '691026',          # savant-player/masyn-winn-691026
-    'jp crawford': '641487',        # savant-player/jp-crawford-641487
-    'j.p. crawford': '641487',
-    'josh naylor': '647304',        # savant-player/josh-naylor-647304
-    'victor scott ii': '687363',    # savant-player/victor-scott-ii-687363
-    # 2026-04-25 additional verified IDs
-    'rhys hoskins': '543333',        # savant-player/rhys-hoskins-543333
-    'juan brito': '701538',          # savant-player/juan-brito-701538
-    'kazuma okamoto': '672960',      # savant-player/kazuma-okamoto-672960
-    'kevin gausman': '592332',       # savant-player/kevin-gausman-592332
-    'joey cantillo': '676282',       # savant-player/joey-cantillo-676282
-    'myles straw': '668678',         # savant-player/myles-straw-668678
-    'davis schneider': '676896',     # savant-player/davis-schneider-676896
-    'eloy jimenez': '650391',        # savant-player/eloy-jimenez-650391
-    'eloy jiménez': '650391',
-    'daulton varsho': '662139',      # savant-player/daulton-varsho-662139
-    'david fry': '681867',           # savant-player/david-fry-681867
-    'ernie clement': '676801',       # savant-player/ernie-clement-676801
-    'steven kwan': '680757',         # savant-player/steven-kwan-680757
-    'angel martinez': '677651',      # savant-player/angel-martinez-677651
-    'ángel martínez': '677651',
-    'brayan rocchio': '672523',      # savant-player/brayan-rocchio-672523
-    'jj wetherholt': '802139',       # savant-player/jj-wetherholt-694192
-    'masyn winn': '691026',
-    'victor scott ii': '687363',
-    # 2026-04-25 fixes — confirmed from Savant URLs
-    'ryan jeffers': '680777',        # was missing — savant-player/ryan-jeffers-680777
-    'shane mcclanahan': '663556',    # savant-player/shane-mcclanahan-663556
-    'bailey ober': '641927',         # savant-player/bailey-ober-641927
-    'jake fraley': '642378',         # savant-player/jake-fraley-642378
-    'josh bell': '605137',           # savant-player/josh-bell-605137
-    'richie palacios': '676939',     # savant-player/richie-palacios-676939
-    'luke keaschall': '701444',      # savant-player/luke-keaschall-701444
+    # Verified from Savant URLs — recurring slates
+    'royce lewis': '668904', 'jonny deluca': '676356',
+    'victor caratini': '605170', 'trevor larnach': '663616',
+    'cedric mullins': '656775', 'matt wallner': '670242',
+    'jonathan aranda': '666018', 'yandy diaz': '650490',
+    'yandy díaz': '650490', 'brooks lee': '686797',
+    'drew rasmussen': '656876', 'taj bradley': '671737',
+    'byron buxton': '621439', 'junior caminero': '691406',
+    'brayan bello': '678394', 'adley rutschman': '668939',
+    'wilyer abreu': '677800', 'pete alonso': '624413',
+    'masataka yoshida': '807799', 'jarren duran': '680776',
+    'ceddanne rafaela': '678882', 'gunnar henderson': '683002',
+    'taylor ward': '621493', 'leody taveras': '665750',
+    'gavin williams': '668909', 'max scherzer': '453286',
+    'andres gimenez': '665926', 'andrés giménez': '665926',
+    'vladimir guerrero jr': '665489', 'vladimir guerrero jr.': '665489',
+    'chase delauter': '800050', 'jesus sanchez': '660821',
+    'jesús sánchez': '660821', 'bo naylor': '666310',
+    'josh naylor': '647304', 'rhys hoskins': '543333',
+    'willson contreras': '575929', 'trevor story': '596115',
+    'brice turang': '671218', 'william contreras': '661388',
+    'jake bauers': '664353', 'gary sanchez': '425794',
+    'gary sánchez': '425794', 'garrett mitchell': '669060',
+    'kerry carpenter': '681481', 'wenceel perez': '676080',
+    'wenceel pérez': '676080', 'mitch garver': '641598',
+    'will wilson': '683737', 'jordan walker': '691023',
+    'alec burleson': '676475', 'ivan herrera': '671056',
+    'julio rodriguez': '677594', 'julio rodríguez': '677594',
+    'bryan woo': '693433', 'randy arozarena': '668227',
+    'matthew liberatore': '669461', 'cal raleigh': '663728',
+    'masyn winn': '691026', 'jp crawford': '641487',
+    'j.p. crawford': '641487', 'victor scott ii': '687363',
+    'jj wetherholt': '802139', 'ryan jeffers': '680777',
+    'shane mcclanahan': '663556', 'bailey ober': '641927',
+    'jake fraley': '642378', 'josh bell': '605137',
+    'richie palacios': '676939', 'luke keaschall': '701444',
+    'esteury ruiz': '665923', 'kyle stowers': '669065',
+    'xavier edwards': '669364', 'otto lopez': '672640',
+    'robbie ray': '594798', 'eury perez': '677542',
+    'eury pérez': '677542', 'drew gilbert': '694109',
+    'luis arraez': '650333', 'rafael devers': '646240',
+    'jung hoo lee': '808967', 'heliot ramos': '671218',
+    'matt chapman': '656305', 'casey schmitt': '676693',
+    'willy adames': '642715', 'patrick bailey': '672389',
+    'agustin ramirez': '701217', 'agustín ramírez': '701217',
+    'leo jimenez': '677800', 'leo jiménez': '677800',
+    'heriberto hernandez': '671296', 'javier sanoja': '694521',
+    'connor norby': '681962', 'rhys hoskins': '543333',
+    'kazuma okamoto': '672960', 'kevin gausman': '592332',
+    'joey cantillo': '676282', 'myles straw': '668678',
+    'davis schneider': '676896', 'eloy jimenez': '650391',
+    'eloy jiménez': '650391', 'daulton varsho': '662139',
+    'david fry': '681867', 'ernie clement': '676801',
+    'steven kwan': '680757', 'angel martinez': '677651',
+    'ángel martínez': '677651', 'brayan rocchio': '672523',
 }
-
 
 # ─── MLB PLAYER ID CACHE ──────────────────────────────────────────────────────
 # Populated at first use from MLB Stats API — covers ALL active 2026 players.
@@ -998,68 +643,6 @@ def search_player_id(name):
     return pid
 
 
-def fetch_from_leaderboard(player_id, player_type='batter'):
-    """
-    Pull 2026 season stats from Savant's expected-stats leaderboard endpoint.
-    This is a proper data API that returns clean JSON — much more reliable than
-    scraping the JS-heavy player page.
-    player_type: 'batter' or 'pitcher'
-    """
-    # Savant leaderboard endpoint accepts player_id filter
-    url = (
-        f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
-        f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1'
-        f'&player_id={player_id}'
-    )
-    raw = savant_get(url, accept_json=True)
-    if not raw:
-        return None
-
-    # Try JSON parse first (API sometimes returns JSON directly)
-    try:
-        data = json.loads(raw)
-        if isinstance(data, list) and data:
-            return _extract_leaderboard_row(data[0])
-        if isinstance(data, dict) and 'data' in data:
-            rows = data['data']
-            if rows:
-                return _extract_leaderboard_row(rows[0])
-    except Exception:
-        pass
-
-    # Sometimes returns HTML — try to find embedded JSON
-    m = re.search(r'var\s+\w+\s*=\s*(\[.*?\]);', raw, re.DOTALL)
-    if m:
-        try:
-            rows = json.loads(m.group(1))
-            if rows:
-                return _extract_leaderboard_row(rows[0])
-        except Exception:
-            pass
-
-    return None
-
-
-def _extract_leaderboard_row(row):
-    """Pull our 5 stats from a leaderboard JSON row."""
-    def g(*keys):
-        for k in keys:
-            v = row.get(k)
-            if v not in (None, '', 'null', 'None'):
-                f = safe_float(v)
-                if f is not None:
-                    return f
-        return None
-
-    return {
-        'exit_velocity':  g('avg_hit_speed', 'exit_velocity', 'avg_exit_velocity', 'launch_speed'),
-        'hard_hit_pct':   g('hard_hit_percent', 'hard_hit_pct', 'hh_pct'),
-        'woba':           g('woba', 'w_oba'),
-        'xwoba':          g('xwoba', 'xw_oba', 'est_woba'),
-        'barrel_pct':     g('barrel_batted_rate', 'barrel_pct', 'barrels_per_bbe_percent', 'brl_percent'),
-        'xslg':           g('xslg', 'est_slg', 'xslg_percent', 'est_slugging'),
-    }
-
 
 def fetch_from_player_page(player_id, player_name=None):
     """
@@ -1190,32 +773,32 @@ def fetch_pitcher_extras(player_id):
 
 def fetch_one_player(info):
     """
-    Option 2 pipeline:
-    - EV, HH%, Barrel%  → Savant player page scrape (confirmed working)
-    - xwOBA, xSLG, wOBA → pybaseball expected_stats (confirmed correct by MLBAM ID)
-    - EV50, SS%         → pybaseball expected_stats (best effort, may be N/A)
-    - FB%               → N/A (no reliable source)
+    Clean data pipeline:
+    1. Use pre-resolved player ID (set by resolve_all_ids before parallel fetch)
+    2. Hit Savant player page — extract summary line for EV, HH%, Barrel%, xwOBA, wOBA
+    3. xSLG filled from page JSON if available
+    4. Pitcher extras: GB%, CSW% via individual Savant endpoints
     """
     result = {
         **info,
-        'exit_velocity': None, 'hard_hit_pct': None,
-        'woba': None, 'xwoba': None, 'barrel_pct': None,
-        'xslg': None,
+        'exit_velocity': None, 'hard_hit_pct': None, 'barrel_pct': None,
+        'xwoba': None, 'woba': None, 'xslg': None,
         'gb_pct': None, 'csw_pct': None,
         'gap': None, 'player_id': None,
         'fetch_status': 'not found',
         'data_source': None,
     }
-    name = info.get('name', '')
-    if not name.strip():
+    name = info.get('name', '').strip()
+    if not name:
         result['fetch_status'] = 'no name'
         return result
 
     ptype = 'pitcher' if info.get('role') == 'PITCHER' else 'batter'
 
-    # Use pre-resolved ID if available (set by resolve_all_ids before parallel fetch)
-    # This prevents 18 parallel threads all doing ID resolution simultaneously
-    pid = info.get('resolved_player_id') or get_player_id(name)
+    # Use pre-resolved ID — set by resolve_all_ids() before parallel fetch starts
+    pid = info.get('resolved_player_id')
+    if not pid:
+        pid = get_player_id(name)
     if not pid:
         pid = search_player_id(name)
     if not pid:
@@ -1223,108 +806,28 @@ def fetch_one_player(info):
         return result
     result['player_id'] = pid
 
-    sources = []
-
-    # ── SOURCE A: Savant player page → EV, HH%, Barrel% ─────────────────────
-    # This scrapes the confirmed summary line:
-    # "(2026) Avg Exit Velocity: X, Hard Hit %: X, wOBA: X, xwOBA: X, Barrel %: X"
+    # Fetch from Savant player page
     page_stats = fetch_from_player_page(pid, player_name=name)
-    if page_stats:
-        for k in ['exit_velocity', 'hard_hit_pct', 'barrel_pct']:
-            v = sane(k, page_stats.get(k))
-            if v is not None:
-                result[k] = v
-        # Also grab wOBA/xwOBA from page as fallback
-        for k in ['woba', 'xwoba']:
-            v = sane(k, page_stats.get(k))
-            if v is not None and result[k] is None:
-                result[k] = v
-        sources.append('savant-page')
-
-    # ── SOURCE B: pybaseball expected_stats → xwOBA, xSLG, wOBA, EV50, SS% ──
-    # Only use expected_stats (ex) — NOT exitvelo_barrels which has wrong IDs
-    if PYBASEBALL_OK:
-        with _pyb_lock:
-            cache = _pyb_batter_cache if ptype == 'batter' else _pyb_pitcher_cache
-        if cache is not None:
-            ex_df = cache.get('ex')
-            if ex_df is not None and not ex_df.empty:
-                rows = ex_df[ex_df['player_id'] == str(pid)]
-                if not rows.empty:
-                    row = rows.iloc[0]
-                    def pf(*cols):
-                        for c in cols:
-                            if c in row.index:
-                                try:
-                                    v = float(row[c])
-                                    if v == v:  # not NaN
-                                        return v
-                                except Exception:
-                                    pass
-                        return None
-                    # xwOBA — pybaseball confirmed correct
-                    xw = sane('xwoba', pf('est_woba'))
-                    if xw is not None:
-                        result['xwoba'] = xw
-                    # wOBA — use pybaseball if page didn't get it
-                    wo = sane('woba', pf('woba'))
-                    if wo is not None and result['woba'] is None:
-                        result['woba'] = wo
-                    # xSLG
-                    xs = sane('xslg', pf('est_slg'))
-                    if xs is not None:
-                        result['xslg'] = xs
-                    sources.append('pybaseball-expected')
-
-    if not any(result[k] is not None for k in ['exit_velocity', 'xwoba', 'barrel_pct']):
+    if not page_stats or not any(v is not None for v in page_stats.values()):
         result['fetch_status'] = 'found/no stats'
-        result['data_source'] = '+'.join(sources) or 'none'
+        result['data_source'] = 'page-empty'
         return result
 
-    # All stats already sanity-checked during extraction above
-    # Fill missing fields from pybaseball expected_stats
-    # Only use pybaseball as a FILL when page scrape returned nothing
-    # Do NOT override page scrape — page scrape hits the live player page which is more current
-    if PYBASEBALL_OK and pid and ptype == 'batter':
-        with _pyb_lock:
-            cache = _pyb_batter_cache
-        if cache is not None:
-            ex_df = cache.get('ex')
-            if ex_df is not None and not ex_df.empty:
-                rows_ex = ex_df[ex_df['player_id'] == str(pid)]
-                if not rows_ex.empty:
-                    row_ex = rows_ex.iloc[0]
-                    def pyb_get(col):
-                        try:
-                            v = float(row_ex[col])
-                            return round(v, 3) if v == v else None
-                        except Exception:
-                            return None
-                    # Only fill fields that page scrape missed entirely
-                    if result.get('xwoba') is None:
-                        v = pyb_get('est_woba')
-                        if v is not None:
-                            result['xwoba'] = v
-                            sources.append('pyb-fill-xwoba')
-                    if result.get('xslg') is None:
-                        v = pyb_get('est_slg')
-                        if v is not None:
-                            result['xslg'] = v
-                            sources.append('pyb-fill-xslg')
-                    if result.get('woba') is None:
-                        v = pyb_get('woba')
-                        if v is not None:
-                            result['woba'] = v
-                            sources.append('pyb-fill-woba')
+    # Apply sanity checks and copy stats
+    for k, v in page_stats.items():
+        checked = sane(k, v)
+        if checked is not None:
+            result[k] = checked
 
     result['fetch_status'] = 'ok'
-    result['data_source'] = '+'.join(sources)
+    result['data_source'] = 'savant-page'
 
+    # Compute GAP
     if result['xwoba'] is not None and result['woba'] is not None:
         result['gap'] = round(result['xwoba'] - result['woba'], 3)
 
-    # For pitchers, fetch GB% and CSW% from separate endpoints
-    if info.get('role') == 'PITCHER' and pid:
+    # Pitcher extras: GB% and CSW%
+    if ptype == 'pitcher':
         extras = fetch_pitcher_extras(pid)
         for k, v in extras.items():
             checked = sane(k, v)
@@ -1971,9 +1474,7 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         jobs[jid]['status'] = 'running'
     # Clear all caches so every run gets fresh daily data
     clear_leaderboard_cache()
-    # Pull fresh pybaseball data (all 2026 players in one shot)
-    if PYBASEBALL_OK:
-        _pull_pybaseball_data()
+
     try:
         # S1
         step_set(jid, 1, 'active', 'Parsing lineup with Claude...')
