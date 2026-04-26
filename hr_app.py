@@ -417,6 +417,10 @@ KNOWN_PLAYER_IDS = {
     'alejandro osuna': '808290',
     'paul skenes': '694973',
     'patrick corbin': '548389',
+    # ID overrides for players with slug collision issues
+    'blaze alexander': '677942',   # force ID — slug resolves to wrong player
+    'dylan beavers': '687637',     # force ID — slug resolves to wrong player
+    'marcelo mayer': '694785',     # savant-player/marcelo-mayer-694785
 }
 
 # ─── MLB PLAYER ID CACHE ──────────────────────────────────────────────────────
@@ -2333,6 +2337,26 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as ex:
                 import traceback
                 self._json({'error': str(ex), 'trace': traceback.format_exc()})
+
+        elif path == '/api/pen-debug':
+            # Test bullpen ERA fetch for any team
+            from urllib.parse import parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            team = qs.get('team', ['Red Sox'])[0]
+            team_id = get_team_id(team)
+            result = {'team': team, 'team_id': team_id}
+            if team_id:
+                url = (f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats'
+                       f'?stats=season&group=pitching&season={CURRENT_YEAR}&gameType=R')
+                try:
+                    req = urllib.request.Request(url, headers=_HEADERS)
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        data = json.loads(r.read())
+                    result['raw_stats'] = data.get('stats', [])
+                    result['era_fetch'] = fetch_bullpen_era(team)
+                except Exception as ex:
+                    result['error'] = str(ex)
+            self._json(result)
 
         elif path == '/api/debug':
             try:
