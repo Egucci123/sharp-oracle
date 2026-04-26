@@ -277,6 +277,17 @@ KNOWN_PLAYER_IDS = {
     'david fry': '681867', 'ernie clement': '676801',
     'steven kwan': '680757', 'angel martinez': '677651',
     'ángel martínez': '677651', 'brayan rocchio': '672523',
+    # 2026-04-25 verified
+    'chris sale': '519242', 'aaron nola': '605400',
+    'jorge mateo': '622761', 'ronald acuna jr': '660670',
+    'ronald acuña jr.': '660670', 'ronald acuña jr': '660670',
+    'bryce harper': '547180', 'matt olson': '621566',
+    'michael harris ii': '671739', 'drake baldwin': '686948',
+    'trea turner': '607208', 'austin riley': '663586',
+    'ozzie albies': '645277', 'kyle schwarber': '656941',
+    'adolis garcia': '666969', 'adolis garcía': '666969',
+    'alec bohm': '664761', 'edmundo sosa': '660688',
+    'mauricio dubon': '643289', 'mauricio dubón': '643289',
 }
 
 # ─── MLB PLAYER ID CACHE ──────────────────────────────────────────────────────
@@ -783,21 +794,16 @@ def fetch_one_player(info):
 
     ptype = 'pitcher' if info.get('role') == 'PITCHER' else 'batter'
 
-    # Use pre-resolved ID — set by resolve_all_ids() before parallel fetch starts
-    pid = info.get('resolved_player_id')
-    if not pid:
-        pid = get_player_id(name)
-    if not pid:
-        pid = search_player_id(name)
-    if not pid:
-        result['fetch_status'] = 'id not found'
-        return result
-    result['player_id'] = pid
+    # Get player ID if available — used as fallback in page fetch
+    # Name-slug fetch works without ID for most players
+    pid = info.get('resolved_player_id') or get_player_id(name)
+    if pid:
+        result['player_id'] = pid
 
-    # Fetch from Savant player page
-    page_stats = fetch_from_player_page(pid, player_name=name)
+    # Fetch from Savant player page — name-slug first, ID as fallback
+    page_stats = fetch_from_player_page(player_id=pid, player_name=name)
     if not page_stats or not any(v is not None for v in page_stats.values()):
-        result['fetch_status'] = 'found/no stats'
+        result['fetch_status'] = 'found/no stats' if pid else 'id not found'
         result['data_source'] = 'page-empty'
         return result
 
