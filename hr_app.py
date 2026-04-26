@@ -1656,9 +1656,17 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         sess['game_data'] = parsed
         sess['statcast']  = all_statcast
 
+        # Fetch bullpen ERA for both teams
+        pen_era = {}
+        for team_name in [parsed.get('team1',''), parsed.get('team2','')]:
+            if team_name:
+                pen_data = fetch_bullpen_era(team_name)
+                if pen_data.get('era') is not None:
+                    pen_era[normalize_name(team_name).lower()] = pen_data
+
         # S5 — full model
         step_set(jid, 5, 'active', 'Running model (all 14 upgrades)...')
-        ctx = build_context_str(parsed, all_statcast)
+        ctx = build_context_str(parsed, all_statcast, pen_era=pen_era)
         user_msg = (
             "Run the full Sharp Oracle HR model on this game.\n"
             "Follow mandatory S1-S9 order. Check every upgrade (#1-#5, #10-#14) against every batter.\n"
@@ -2357,6 +2365,31 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as ex:
                     result['error'] = str(ex)
             self._json(result)
+
+        elif path == '/api/lb-test':
+            # Test if Savant leaderboard endpoints are accessible from this Railway region
+            from urllib.parse import parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            pid = qs.get('pid', ['545361'])[0]
+            results = {}
+            endpoints = {
+                'expected_stats': f'https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=batter&year={CURRENT_YEAR}&player_id={pid}&min=0',
+                'statcast': f'https://baseballsavant.mlb.com/leaderboard/statcast?type=batter&year={CURRENT_YEAR}&player_id={pid}&min=0',
+                'batted_ball': f'https://baseballsavant.mlb.com/leaderboard/batted-ball?type=batter&year={CURRENT_YEAR}&player_id={pid}',
+                'arsenal': f'https://baseballsavant.mlb.com/leaderboard/pitch-arsenals?type=pitcher&year={CURRENT_YEAR}&player_id={pid}',
+            }
+            for name, url in endpoints.items():
+                try:
+                    raw = savant_get(url, accept_json=True)
+                    if raw:
+                        data = json.loads(raw)
+                        rows = data if isinstance(data, list) else data.get('data', [])
+                        results[name] = {'status': 'OK', 'rows': len(rows), 'sample': rows[0] if rows else None}
+                    else:
+                        results[name] = {'status': 'BLOCKED/EMPTY'}
+                except Exception as ex:
+                    results[name] = {'status': f'ERROR: {ex}'}
+            self._json(results)
 
         elif path == '/api/debug':
             try:
