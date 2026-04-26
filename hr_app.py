@@ -39,9 +39,6 @@ BATTER GRADE (0-4 pts):
 
 PLATOON: LHB vs RHP=fav | RHB vs LHP=fav | Switch=fav | Same-side=drops half grade
 EV THRESHOLD: 91 mph (lowered from 93 — research shows 91+ is meaningfully above MLB avg ~90mph)
-xSLG FLAGS: xSLG=ELITE(>=.600)=elite power tier, upgrades HR grade half step when 3+/4 thresholds met
-            xSLG=POWER(>=.500)=strong HR candidate | xSLG=AVG(>=.400)=above average power
-  xSLG is sourced from pybaseball expected stats — reliable data, use in grading.
 GAP: xwOBA-wOBA. Positive=COLD(buy). Negative=HOT(fade for HR, good for hits).
 PARKS: BOOSTER=Yankee/GABP/CBP/Coors/Sutter | SUPPRESSOR=Comerica/Petco/Oracle/T-Mobile
 DOMES(no weather): AmFam/Tropicana/Globe Life/Chase Field
@@ -653,7 +650,7 @@ def fetch_from_player_page(player_id, player_name=None):
     pid = str(player_id)
     stats = {
         'exit_velocity': None, 'hard_hit_pct': None, 'barrel_pct': None,
-        'xwoba': None, 'woba': None, 'xslg': None,
+        'xwoba': None, 'woba': None,
     }
 
     # Try numeric ID URL with year param — forces 2026 stats
@@ -757,17 +754,8 @@ def fetch_pitcher_extras(player_id):
     if row_csw:
         result['csw_pct'] = g(row_csw, 'csw', 'csw_pct', 'csw_percent', 'called_strike_whiff_pct')
 
-    # Fallback: bulk caches if individual endpoints blocked
-    if result['gb_pct'] is None:
-        for row in _load_batted_ball_cache():
-            if str(row.get('player_id') or row.get('pitcher') or '') == pid:
-                result['gb_pct'] = g(row, 'gb_percent', 'groundball_percent', 'gb_pct', 'gb')
-                break
-    if result['csw_pct'] is None:
-        for row in _load_arsenal_cache():
-            if str(row.get('player_id') or row.get('pitcher') or '') == pid:
-                result['csw_pct'] = g(row, 'csw', 'csw_pct', 'csw_percent', 'called_strike_whiff_pct')
-                break
+    # Fallback: bulk caches removed — individual endpoints only
+    # If individual endpoints are blocked, GB%/CSW% stay None (shown as PROXY in output)
 
     return result
 
@@ -782,7 +770,7 @@ def fetch_one_player(info):
     result = {
         **info,
         'exit_velocity': None, 'hard_hit_pct': None, 'barrel_pct': None,
-        'xwoba': None, 'woba': None, 'xslg': None,
+        'xwoba': None, 'woba': None,
         'gb_pct': None, 'csw_pct': None,
         'gap': None, 'player_id': None,
         'fetch_status': 'not found',
@@ -1212,13 +1200,7 @@ def compute_batter_score(b):
     else:
         gap_flag = 'N/A'
 
-    # xSLG power flag
-    xslg = b.get('xslg')
     xslg_flag = ''
-    if xslg is not None:
-        if xslg >= 0.600:   xslg_flag = ' xSLG=ELITE'
-        elif xslg >= 0.500: xslg_flag = ' xSLG=POWER'
-        elif xslg >= 0.400: xslg_flag = ' xSLG=AVG'
 
 
 
@@ -1324,11 +1306,10 @@ def build_context_str(parsed, all_statcast, pen_era=None):
             g = b.get('gap')
             gs = f"{g:+.3f}" if g is not None else 'N/A'
             proxy = '[PROXY] ' if 'not found' in str(b.get('fetch_status','')) or 'no stat' in str(b.get('fetch_status','')) else ''
-            xslg_str = f" xSLG={b.get('xslg','N/A')}" if b.get('xslg') is not None else ''
             lines.append(
                 f"  #{b.get('lineup_pos','?')} {proxy}{b.get('name','?')} ({b.get('hand','?')}HB) | "
                 f"SCORE={score}/4 | plat={platoon} | gap={gs}({gap_flag}){hr_cap}{extra_flags} | "
-                f"wOBA={b.get('woba','N/A')}{xslg_str} | {breakdown}"
+                f"wOBA={b.get('woba','N/A')} | {breakdown}"
             )
         lines.append('')
 
@@ -1788,7 +1769,7 @@ tr:hover td{background:var(--s2)}
         <table>
           <thead><tr>
             <th>PLAYER</th><th>ROLE</th><th>BRL%</th><th>EV</th><th>HH%</th>
-            <th>xwOBA</th><th>xSLG</th><th>wOBA</th><th>GAP</th><th>STATUS</th>
+            <th>xwOBA</th><th>wOBA</th><th>GAP</th><th>STATUS</th>
           </tr></thead>
           <tbody id="tblBody"></tbody>
         </table>
@@ -1971,7 +1952,6 @@ function renderTable(data) {
       `<td>${f(p.exit_velocity, 93)}</td>` +
       `<td>${f(p.hard_hit_pct, 50)}</td>` +
       `<td>${f(p.xwoba, .350)}</td>` +
-      `<td>${f(p.xslg, .500)}</td>` +
       `<td>${p.woba != null ? p.woba : '<span class="na">N/A</span>'}</td>` +
       `<td class="${gapc}">${gap}</td>` +
       `<td class="${p.fetch_status === 'ok' ? 'ok' : 'nf'}">${p.fetch_status||'\u2014'}</td>`;
