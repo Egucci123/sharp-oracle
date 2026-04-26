@@ -1173,19 +1173,23 @@ def parse_lineup_claude(raw, game_date=None):
         park_name = venue_name
         park_source = 'MLB API (confirmed)'
     else:
-        # Fallback: use paste order, treat @ direction or first-mentioned as away
-        # Try to detect @ direction in raw paste
+        # Fallback: detect @ direction — team1 @ team2 means team1=away, team2=home
         at_match = re.search(r'([A-Za-z ]+?)\s*@\s*([A-Za-z ]+?)(?:\n|$|vs)', raw)
         if at_match:
-            away_team = team1
-            home_team = team2
+            away_team = team1   # team before @ is away
+            home_team = team2   # team after @ is home
+            # away pitcher faces home batters; home pitcher faces away batters
+            home_p    = raw_parsed.get('team2_pitcher', {})  # home team pitcher
+            away_p    = raw_parsed.get('team1_pitcher', {})  # away team pitcher
+            home_bats = raw_parsed.get('team2_batters', [])  # home team batters
+            away_bats = raw_parsed.get('team1_batters', [])  # away team batters
         else:
             away_team = team1
             home_team = team2
-        home_p    = raw_parsed.get('team1_pitcher', {})
-        away_p    = raw_parsed.get('team2_pitcher', {})
-        home_bats = raw_parsed.get('team1_batters', [])
-        away_bats = raw_parsed.get('team2_batters', [])
+            home_p    = raw_parsed.get('team2_pitcher', {})
+            away_p    = raw_parsed.get('team1_pitcher', {})
+            home_bats = raw_parsed.get('team2_batters', [])
+            away_bats = raw_parsed.get('team1_batters', [])
         park_name = ''
         park_source = 'FALLBACK (MLB API unavailable — verify park)'
 
@@ -1201,6 +1205,7 @@ def parse_lineup_claude(raw, game_date=None):
     else:
         park_name = park_lookup_name
 
+    print(f"[PARSE] away={away_team} @ home={home_team} | home_pitcher={home_p.get('name','?')} | away_pitcher={away_p.get('name','?')}")
     return {
         'home_team':    home_team,
         'away_team':    away_team,
