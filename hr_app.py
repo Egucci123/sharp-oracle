@@ -507,6 +507,17 @@ def lookup_player_in_leaderboard(name, player_type='batter'):
     return None, {}
 
 
+SANE = {
+    'exit_velocity':  (50.0,  125.0),
+    'hard_hit_pct':   (0.0,   100.0),
+    'barrel_pct':     (0.0,   100.0),
+    'xwoba':          (0.050, 1.000),
+    'woba':           (0.050, 1.000),
+    'xslg':           (0.050, 1.500),
+    'gb_pct':         (0.0,   100.0),
+    'csw_pct':        (0.0,   100.0),
+}
+
 def sane(stat, val):
     """Return val if within MLB-realistic range, else None."""
     if val is None:
