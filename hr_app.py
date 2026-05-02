@@ -79,7 +79,15 @@ SYSTEM_PROMPT = (
     "- Set pitcher gates, apply GB%/CSW% modifiers\n"
     "- Apply platoon edges, gap signals, park, weather, bullpen ERA\n"
     "- Run all 14 upgrades\n"
-    "- Use EV50, SS%, FB/LD EV, HR distance as tiebreakers and sharp angles\n\n"
+    "- Use EV50, SS%, FB/LD EV, HR distance as tiebreakers and sharp angles\n"
+    "- SLEEPER SCAN — run this on every batter before finalizing picks:\n"
+    "  * GAP>=+.060 in lineup spots 6-9 = market ignoring regression, price is wrong\n"
+    "  * EV50>=103 + SS%>=35 + any COLD gap = elite power the market underweights\n"
+    "  * Brl/PA>=10 + HOT gap = true power rate masked by results, buy the skill not the outcome\n"
+    "  * FB/LD EV>=96 + fav platoon + OPEN gate = elite fly ball contact mispriced\n"
+    "  * xwOBA>=.380 + wOBA<.310 = extreme cold gap, massive regression candidate\n"
+    "  * 0/4 or 1/4 score BUT EV50>=104 = raw power tool that thresholds miss\n"
+    "  If a batter hits 2+ sleeper signals, they belong in TOP 5 HR even over higher-graded chalk.\n\n"
     "DATA RULES: Use ONLY pre-computed scores and flags in the context. "
     "GAP positive = COLD (buy regression). GAP negative = HOT (fade HR, hits still fine). "
     "[PROXY] = no 2026 data, max B grade.\n\n"
@@ -89,18 +97,19 @@ SYSTEM_PROMPT = (
     "Gun-to-head: rank them best to worst and pick. Note confidence level if slate is weak.\n\n"
     "══════════════════════════════════════\n"
     "TOP 5 HR BETS:\n"
-    "1. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
-    "2. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
-    "3. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
-    "4. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
-    "5. [Name] ([Team]) | [odds] | [2 sharp sentences]\n\n"
+    "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences — if sleeper, start with 🔥 SLEEPER: and name the signals]\n"
+    "2. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
+    "3. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
+    "4. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
+    "5. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n\n"
     "TOP 5 HIT BETS:\n"
-    "1. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
-    "2. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
-    "3. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
-    "4. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
-    "5. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
+    "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
+    "2. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
+    "3. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
+    "4. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
+    "5. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
     "══════════════════════════════════════\n\n"
+    "Sleeper picks: start the sentence with '🔥 SLEEPER:' and name exactly which signals fired.\n"
     "These two sections MUST always appear at the end. Always 5 HR picks and 5 hit picks. Always.\n\n"
     + LOCKED_RULES
 )
@@ -1146,7 +1155,7 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         analysis = call_claude(
             [{'role': 'user', 'content': ctx}],
             system=SYSTEM_PROMPT,
-            max_tokens=6000
+            max_tokens=8000
         )
         with store_lock:
             jobs[jid]['result'] = analysis
