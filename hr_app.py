@@ -1310,8 +1310,6 @@ fetch('/api/status').then(r=>r.json()).then(d=>{
   document.getElementById('cacheStatus').innerHTML=n>100?`<span style="color:#22c55e">${n} players</span>`:`<span style="color:#f97316">loading...</span>`;
 }).catch(()=>{document.getElementById('cacheStatus').textContent='offline'});
 
-let lastStatcast = [];
-
 function show(name,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
@@ -1383,11 +1381,6 @@ function showInfo(p,pen){
 }
 
 function showStats(stats){
-  if(stats&&stats.length>0) lastStatcast=stats;
-  renderStats(stats);
-}
-
-function renderStats(stats){
   try {
     const fv=(v,thr)=>{
       if(v==null||v===undefined||v==='')return`<span class="na">—</span>`;
