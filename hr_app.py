@@ -186,66 +186,81 @@ _stats_loaded = False
 _stats_lock = threading.Lock()
 
 def load_stats_cache():
-    """Pull full Savant custom leaderboard (all 2026 players, min 1 PA)."""
+    """
+    Pull Savant leaderboards. Tries multiple endpoints.
+    Returns dict keyed by normalized player name.
+    """
     global _stats_cache, _stats_loaded
     with _stats_lock:
         if _stats_loaded:
             return _stats_cache
         _stats_cache = {}
 
-    def pull(player_type):
-        # Use the expected_statistics leaderboard which reliably returns JSON
-        url = (
-            f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
-            f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1'
-            f'&csv=false'
-        )
-        raw = savant_get(url, accept_json=True, timeout=25)
+    def try_parse_json(raw, player_type):
+        """Try to parse JSON from raw response, handling HTML wrappers."""
         if not raw:
-            # Fallback: try custom leaderboard
-            url = (
-                f'https://baseballsavant.mlb.com/leaderboard/custom'
-                f'?year={CURRENT_YEAR}&type={player_type}&filter=&min=1'
-                f'&selections=pa,woba,xwoba,barrel_batted_rate,avg_hit_speed,'
-                f'ev95percent,groundballs_percent,csw'
-                f'&chart=false'
-            )
-            raw = savant_get(url, accept_json=True, timeout=25)
-        if not raw:
-            return 0
-        # Strip HTML if Savant returned a page instead of JSON
+            return []
         raw = raw.strip()
-        if raw.startswith('<'):
-            # Try to extract JSON from script tag
-            m = re.search(r'var\s+data\s*=\s*(\[.*?\]);', raw, re.DOTALL)
-            if not m:
-                m = re.search(r'initData\s*\(\s*(\[.*?\])\s*\)', raw, re.DOTALL)
+        # Direct JSON
+        if raw.startswith('[') or raw.startswith('{'):
+            try:
+                data = json.loads(raw)
+                return data if isinstance(data, list) else data.get('data', [])
+            except Exception:
+                pass
+        # HTML with embedded JSON — look for JS variable assignments
+        for pattern in [
+            r'var\s+data\s*=\s*(\[.*?\])\s*;',
+            r'"data"\s*:\s*(\[.*?\])',
+            r'initData\((\[.*?\])\)',
+        ]:
+            m = re.search(pattern, raw, re.DOTALL)
             if m:
-                raw = m.group(1)
+                try:
+                    return json.loads(m.group(1))
+                except Exception:
+                    pass
+        return []
+
+    def pull_endpoint(url, player_type):
+        raw = savant_get(url, accept_json=True, timeout=25)
+        rows = try_parse_json(raw, player_type)
+        count = 0
+        for row in rows:
+            # Try all possible name fields
+            name = (row.get('name_display_first_last') or
+                    row.get('player_name') or row.get('name') or
+                    f"{row.get('first_name','')} {row.get('last_name','')}".strip() or
+                    f"{row.get('last_name','')}, {row.get('first_name','')}".strip()).strip(' ,')
+            if name and len(name) > 2:
+                key = normalize_name(name).lower()
+                _stats_cache[key] = row
+                count += 1
+        return count
+
+    # Try multiple Savant leaderboard endpoints for each player type
+    total = 0
+    for player_type in ['batter', 'pitcher']:
+        endpoints = [
+            (f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
+             f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
+            (f'https://baseballsavant.mlb.com/leaderboard/statcast'
+             f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1'),
+            (f'https://baseballsavant.mlb.com/leaderboard/custom'
+             f'?year={CURRENT_YEAR}&type={player_type}&filter=&min=1'
+             f'&selections=pa,woba,xwoba,barrel_batted_rate,avg_hit_speed,'
+             f'ev95percent,groundballs_percent,csw&chart=false'),
+        ]
+        for url in endpoints:
+            n = pull_endpoint(url, player_type)
+            if n > 10:
+                total += n
+                print(f"[STATS CACHE] {player_type}={n} from {url[:60]}")
+                break
             else:
-                return 0
-        try:
-            data = json.loads(raw)
-            rows = data if isinstance(data, list) else data.get('data', [])
-            count = 0
-            for row in rows:
-                name = (row.get('name_display_first_last') or
-                        row.get('player_name') or
-                        row.get('last_name', '') + ', ' + row.get('first_name', '') or
-                        row.get('name') or '').strip().strip(',')
-                if name:
-                    key = normalize_name(name).lower()
-                    _stats_cache[key] = row
-                    count += 1
-            return count
-        except Exception as e:
-            print(f"[STATS CACHE] Parse error ({player_type}): {e} | first 200: {raw[:200]}")
-            return 0
+                print(f"[STATS CACHE] {player_type} got {n} rows from {url[:60]}")
 
-    b = pull('batter')
-    p = pull('pitcher')
-    print(f"[STATS CACHE] Batters={b} Pitchers={p} Total={len(_stats_cache)}")
-
+    print(f"[STATS CACHE] Total={len(_stats_cache)}")
     with _stats_lock:
         _stats_loaded = True
     return _stats_cache
@@ -262,29 +277,31 @@ def get_cached_stats(name):
     key = normalize_name(name).lower()
     if key in cache:
         return cache[key]
-    # Try first+last only (handles middle names)
     parts = key.split()
     if len(parts) >= 2:
-        short = f'{parts[0]} {parts[-1]}'
-        if short in cache:
-            return cache[short]
+        # Try first+last
+        if f'{parts[0]} {parts[-1]}' in cache:
+            return cache[f'{parts[0]} {parts[-1]}']
+        # Try last, first (some leaderboards use this format)
+        if f'{parts[-1]}, {parts[0]}' in cache:
+            return cache[f'{parts[-1]}, {parts[0]}']
     return None
 
 # ─── SAVANT PAGE SCRAPE (fallback) ────────────────────────────────────────────
 def scrape_player_page(player_name):
     """
-    Fallback: scrape Savant player page by name slug.
-    Extracts stats from embedded JSON blobs in the page.
+    Scrape Savant player page by name slug.
+    The page embeds Statcast stats as JSON in script tags and table rows.
+    Tries multiple extraction patterns to find 2026 data.
     """
     slug = normalize_name(player_name).lower().replace(' ', '-')
-    urls = [
+    html = None
+    for url in [
         f'https://baseballsavant.mlb.com/savant-player/{slug}?season={CURRENT_YEAR}',
         f'https://baseballsavant.mlb.com/savant-player/{slug}',
-    ]
-    html = None
-    for url in urls:
+    ]:
         raw = savant_get(url)
-        if raw and len(raw) > 5000:
+        if raw and len(raw) > 10000:
             html = raw
             break
     if not html:
@@ -292,60 +309,73 @@ def scrape_player_page(player_name):
 
     stats = {}
 
-    # Method 1: find the statcast batting stats table JSON blob
-    # Savant embeds data as: {"avg_hit_speed": X, "ev95percent": X, ...}
-    # Look for a blob containing avg_hit_speed for 2026
-    patterns = re.findall(
-        r'\{[^{}]*"avg_hit_speed"\s*:\s*"?([\d.]+)"?[^{}]*\}',
-        html
-    )
-    for blob_str in patterns:
+    # Pattern 1: Look for statcast table row data embedded as JS
+    # Format: {"year":2026,"avg_hit_speed":95.8,"ev95percent":54.8,...}
+    # Find all JSON objects that have avg_hit_speed
+    blobs = re.findall(r'\{[^{}]{20,500}\}', html)
+    best = {}
+    for blob in blobs:
+        if 'avg_hit_speed' not in blob and 'exit_velocity' not in blob:
+            continue
         try:
-            # Extract individual fields from this blob
-            ev  = re.search(r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?', blob_str)
-            hh  = re.search(r'"ev95percent"\s*:\s*"?([\d.]+)"?', blob_str)
-            brl = re.search(r'"brl_bip_percent"\s*:\s*"?([\d.]+)"?', blob_str)
-            xw  = re.search(r'"est_woba"\s*:\s*"?([.\d]+)"?', blob_str)
-            wo  = re.search(r'"woba"\s*:\s*"?([.\d]+)"?', blob_str)
-            yr  = re.search(r'"year"\s*:\s*"?(\d+)"?', blob_str)
-
-            # Only use 2026 data
-            if yr and yr.group(1) != str(CURRENT_YEAR):
-                continue
-
-            if ev:
-                stats['exit_velocity'] = safe_float(ev.group(1))
-            if hh:
-                stats['hard_hit_pct'] = safe_float(hh.group(1))
-            if brl:
-                stats['barrel_pct'] = safe_float(brl.group(1))
-            if xw:
-                stats['xwoba'] = safe_float(xw.group(1))
-            if wo:
-                stats['woba'] = safe_float(wo.group(1))
-
-            if stats.get('xwoba') is not None:
-                return stats
+            d = json.loads(blob)
         except Exception:
+            # Try partial extraction with regex
+            d = {}
+            for field, pattern in [
+                ('avg_hit_speed', r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?'),
+                ('ev95percent',   r'"ev95percent"\s*:\s*"?([\d.]+)"?'),
+                ('brl_bip_percent', r'"brl_bip_percent"\s*:\s*"?([\d.]+)"?'),
+                ('est_woba',      r'"est_woba"\s*:\s*"?([.\d]+)"?'),
+                ('woba',          r'"woba"\s*:\s*"?([.\d]+)"?'),
+                ('year',          r'"year"\s*:\s*"?(\d+)"?'),
+            ]:
+                m2 = re.search(pattern, blob)
+                if m2:
+                    d[field] = m2.group(1)
+
+        yr = str(d.get('year', '')).strip('"')
+        if yr and yr != str(CURRENT_YEAR):
             continue
 
-    # Method 2: broader search for key fields anywhere in page
-    if not stats.get('xwoba'):
-        xw = re.search(r'"est_woba"\s*:\s*"?([0-9.]+)"?', html)
-        ev = re.search(r'"avg_hit_speed"\s*:\s*"?([0-9.]+)"?', html)
-        hh = re.search(r'"ev95percent"\s*:\s*"?([0-9.]+)"?', html)
-        brl = re.search(r'"brl_bip_percent"\s*:\s*"?([0-9.]+)"?', html)
-        wo = re.search(r'"woba"\s*:\s*"?([0-9.]+)"?', html)
-        if xw:
-            stats['xwoba'] = safe_float(xw.group(1))
-        if ev:
-            stats['exit_velocity'] = safe_float(ev.group(1))
-        if hh:
-            stats['hard_hit_pct'] = safe_float(hh.group(1))
-        if brl:
-            stats['barrel_pct'] = safe_float(brl.group(1))
-        if wo:
-            stats['woba'] = safe_float(wo.group(1))
+        ev  = safe_float(d.get('avg_hit_speed') or d.get('exit_velocity'))
+        hh  = safe_float(d.get('ev95percent') or d.get('hard_hit_percent'))
+        brl = safe_float(d.get('brl_bip_percent') or d.get('barrel_batted_rate') or d.get('barrel_pct'))
+        xw  = safe_float(d.get('est_woba') or d.get('xwoba') or d.get('xwoba_mean'))
+        wo  = safe_float(d.get('woba'))
+
+        if xw is not None and xw > 0.050:
+            best = {'exit_velocity': ev, 'hard_hit_pct': hh,
+                    'barrel_pct': brl, 'xwoba': xw, 'woba': wo}
+            break  # Take first valid 2026 match
+
+    if best.get('xwoba'):
+        return best
+
+    # Pattern 2: Broad regex scan across entire page for key fields
+    # Savant embeds stats in multiple formats
+    field_map = {
+        'exit_velocity': [r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?',
+                          r'avg_hit_speed["\s:]+([0-9.]+)'],
+        'hard_hit_pct':  [r'"ev95percent"\s*:\s*"?([\d.]+)"?',
+                          r'ev95percent["\s:]+([0-9.]+)'],
+        'barrel_pct':    [r'"brl_bip_percent"\s*:\s*"?([\d.]+)"?',
+                          r'barrel_batted_rate["\s:]+([0-9.]+)'],
+        'xwoba':         [r'"est_woba"\s*:\s*"?([.\d]+)"?',
+                          r'"xwoba"\s*:\s*"?([.\d]+)"?'],
+        'woba':          [r'"woba"\s*:\s*"?([.\d]+)"?'],
+        'gb_pct':        [r'"groundballs_percent"\s*:\s*"?([\d.]+)"?',
+                          r'"gb_percent"\s*:\s*"?([\d.]+)"?'],
+        'csw_pct':       [r'"csw"\s*:\s*"?([\d.]+)"?'],
+    }
+    for stat, patterns in field_map.items():
+        for pat in patterns:
+            m2 = re.search(pat, html)
+            if m2:
+                val = safe_float(m2.group(1))
+                if val is not None:
+                    stats[stat] = val
+                    break
 
     return stats if stats.get('xwoba') is not None else None
 
@@ -368,27 +398,35 @@ def fetch_one_player(info):
         result['fetch_status'] = 'no name'
         return result
 
-    def g(row, *keys):
-        for k in keys:
-            v = row.get(k)
-            if v not in (None, '', 'null', 'None', 'NaN'):
-                f = safe_float(v)
-                if f is not None:
-                    return f
-        return None
-
     # SOURCE 1: bulk cache
     row = get_cached_stats(name)
     if row:
-        result['exit_velocity'] = sane('exit_velocity', g(row, 'avg_hit_speed'))
-        result['hard_hit_pct']  = sane('hard_hit_pct',  g(row, 'ev95percent'))
-        result['barrel_pct']    = sane('barrel_pct',    g(row, 'barrel_batted_rate'))
-        result['xwoba']         = sane('xwoba',         g(row, 'est_woba', 'xwoba'))
-        result['woba']          = sane('woba',           g(row, 'woba'))
-        result['gb_pct']        = sane('gb_pct',         g(row, 'groundballs_percent', 'gb_percent'))
-        result['csw_pct']       = sane('csw_pct',        g(row, 'csw', 'csw_pct'))
-        result['data_source']   = 'leaderboard'
-        result['fetch_status']  = 'ok'
+        def g(row, *keys):
+            for k in keys:
+                v = row.get(k)
+                if v not in (None, '', 'null', 'None', 'NaN', 'null'):
+                    f = safe_float(v)
+                    if f is not None and f > 0:
+                        return f
+            return None
+        # Cover ALL possible field names across every Savant endpoint
+        result['exit_velocity'] = sane('exit_velocity', g(row,
+            'avg_hit_speed', 'exit_velocity', 'avg_exit_velocity'))
+        result['hard_hit_pct']  = sane('hard_hit_pct', g(row,
+            'ev95percent', 'hard_hit_percent', 'hard_hit_bip_percent', 'hh_percent'))
+        result['barrel_pct']    = sane('barrel_pct', g(row,
+            'brl_bip_percent', 'barrel_batted_rate', 'barrel_pct', 'brl_percent'))
+        result['xwoba']         = sane('xwoba', g(row,
+            'est_woba', 'xwoba', 'xwoba_mean', 'expected_woba'))
+        result['woba']          = sane('woba', g(row,
+            'woba', 'woba_mean'))
+        result['gb_pct']        = sane('gb_pct', g(row,
+            'groundballs_percent', 'gb_percent', 'gb_pct'))
+        result['csw_pct']       = sane('csw_pct', g(row,
+            'csw', 'csw_pct', 'called_strike_whiff_pct'))
+        if result['xwoba'] is not None:
+            result['data_source']  = 'leaderboard'
+            result['fetch_status'] = 'ok'
 
     # SOURCE 2: page scrape if cache miss or missing key fields
     if result['fetch_status'] != 'ok' or result['xwoba'] is None:
@@ -1216,28 +1254,46 @@ class Handler(BaseHTTPRequestHandler):
             name = qs.get('name', ['Elly De La Cruz'])[0]
             result = {'name_tested': name}
 
-            # Test leaderboard
-            clear_stats_cache()
-            cache = load_stats_cache()
-            result['cache_total'] = len(cache)
-            row = get_cached_stats(name)
-            result['found_in_cache'] = row is not None
-            if row:
-                result['cache_row_keys'] = list(row.keys())
-                result['cache_row_sample'] = {k: v for k,v in row.items()
-                                               if k in ('avg_hit_speed','ev95percent','brl_bip_percent',
-                                                        'est_woba','woba','barrel_batted_rate','name_display_first_last')}
+            # Test each leaderboard endpoint raw
+            endpoints = [
+                ('expected_stats_batter',
+                 f'https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=batter&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
+                ('statcast_batter',
+                 f'https://baseballsavant.mlb.com/leaderboard/statcast?type=batter&year={CURRENT_YEAR}&position=&team=&min=1'),
+                ('expected_stats_pitcher',
+                 f'https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=pitcher&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
+            ]
+            for ep_name, url in endpoints:
+                raw = savant_get(url, accept_json=True, timeout=20)
+                if not raw:
+                    result[ep_name] = 'NO_RESPONSE'
+                    continue
+                raw = raw.strip()
+                result[f'{ep_name}_bytes'] = len(raw)
+                result[f'{ep_name}_starts_with'] = raw[:50]
+                if raw.startswith('[') or raw.startswith('{'):
+                    try:
+                        data = json.loads(raw)
+                        rows = data if isinstance(data, list) else data.get('data', [])
+                        result[f'{ep_name}_rows'] = len(rows)
+                        if rows:
+                            result[f'{ep_name}_keys'] = list(rows[0].keys())[:20]
+                            # Find target player
+                            key = normalize_name(name).lower()
+                            for row in rows:
+                                n = (row.get('name_display_first_last') or
+                                     row.get('player_name') or row.get('name') or '').strip()
+                                if normalize_name(n).lower() == key:
+                                    result[f'{ep_name}_player'] = row
+                                    break
+                    except Exception as e:
+                        result[f'{ep_name}_parse_err'] = str(e)
+                else:
+                    result[f'{ep_name}_is_html'] = True
 
             # Test page scrape
             scraped = scrape_player_page(name)
             result['page_scraped'] = scraped
-
-            # Test full fetch
-            player_info = {'name': name, 'role': 'BATTER', 'hand': 'S', 'lineup_pos': 3, 'team': 'Reds'}
-            fetched = fetch_one_player(player_info)
-            result['fetch_result'] = {k: v for k,v in fetched.items()
-                                       if k in ('exit_velocity','hard_hit_pct','barrel_pct',
-                                                'xwoba','woba','gap','fetch_status','data_source')}
 
             self._json(result)
 
