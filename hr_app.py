@@ -1335,18 +1335,10 @@ function poll(){
   fetch('/api/poll?jid='+curJid+'&t='+Date.now()).then(r=>r.json()).then(d=>{
     updateSteps(d.steps||[]);
     if(d.park_confirm&&Object.keys(d.park_confirm).length)showInfo(d.park_confirm,d.bullpen||{});
-    if(d.statcast&&d.statcast.length>0){
-      const expected = d.statcast_total||0;
-      // Only render when all players are fetched
-      if(expected===0||d.statcast.length>=expected){
-        showStats(d.statcast);
-      }
-    }
     if(d.status==='done'||d.status==='error'){
       clearInterval(pollTimer);
       document.getElementById('result').textContent=d.status==='done'?(d.result||''):'Error: '+(d.error||'');
       document.getElementById('runBtn').disabled=false;
-      // Show statcast first so user can review, then switch to picks
       if(d.statcast&&d.statcast.length>0) showStats(d.statcast);
       show('picks',document.querySelectorAll('.nav-btn')[2]);
       fetch('/api/status').then(r=>r.json()).then(s=>{
