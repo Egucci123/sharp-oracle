@@ -1133,7 +1133,8 @@ jobs[jid][‘status’] = ‘running’
 try:
 # STEP 1: Parse lineup
 step_set(jid, 0, ‘active’, ‘Parsing lineup…’)
-clear_stats_cache()  # fresh data every run
+# NOTE: Do NOT clear cache here — cache is managed by _daily_refresh_loop
+# Clearing on every run causes partial data when downloads are in progress
 parsed = parse_lineup(raw_lineup, game_date)
 home = parsed.get(‘home_team’, ‘?’)
 away = parsed.get(‘away_team’, ‘?’)
