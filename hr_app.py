@@ -727,29 +727,36 @@ def fetch_bullpen_era(team_name):
 def parse_lineup(raw, game_date=None):
     """
     Parse raw lineup paste using Claude.
+    Handles any format: MLB.com, Rotowire, FantasyPros, plain text, etc.
     Extracts: away_team, home_team, away_pitcher, home_pitcher,
               away_batters, home_batters (with hand, lineup_pos).
-    Verifies home/away via MLB Stats API.
     """
-    prompt = f"""Parse this MLB lineup paste. Return JSON only, no other text.
+    prompt = f"""You are parsing an MLB lineup. It could be pasted from ANY source —
+MLB.com, Rotowire, FantasyPros, ESPN, a plain text list, or anything else.
+Extract the information and return JSON only, no other text.
 
-The format is: AwayTeam @ HomeTeam
-The away team pitches at the away stadium, home team plays at HOME.
-Away pitcher faces HOME batters. Home pitcher faces AWAY batters.
+RULES:
+- The game format is AwayTeam @ HomeTeam (team before @ is AWAY, team after @ is HOME)
+- If no @ symbol, infer from context (stadium name, "home"/"away" labels, etc.)
+- Away pitcher faces HOME batters. Home pitcher faces AWAY batters.
+- Batter hand: R=right, L=left, S=switch. If not listed, guess from player name knowledge.
+- Lineup position: batting order 1-9. If not listed, use the order they appear.
+- Include ALL batters listed, even if hand is unknown (use "R" as default).
+- If a field is truly unknown, use "?" not null.
 
 Return this exact JSON structure:
 {{
   "away_team": "team name",
   "home_team": "team name",
-  "away_pitcher": {{"name": "...", "hand": "R/L"}},
-  "home_pitcher": {{"name": "...", "hand": "R/L"}},
-  "away_batters": [{{"name": "...", "hand": "R/L/S", "lineup_pos": 1}}],
-  "home_batters": [{{"name": "...", "hand": "R/L/S", "lineup_pos": 1}}],
-  "park_name": "...",
+  "away_pitcher": {{"name": "First Last", "hand": "R/L"}},
+  "home_pitcher": {{"name": "First Last", "hand": "R/L"}},
+  "away_batters": [{{"name": "First Last", "hand": "R/L/S", "lineup_pos": 1}}],
+  "home_batters": [{{"name": "First Last", "hand": "R/L/S", "lineup_pos": 1}}],
+  "park_name": "stadium name or ?",
   "game_date": "{game_date or ''}"
 }}
 
-Lineup:
+Lineup to parse:
 {raw}"""
 
     resp = call_claude([{'role': 'user', 'content': prompt}], max_tokens=2000)
