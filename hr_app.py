@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-
-# Sharp Oracle HR Prop Model
-
-# Clean architecture: lineup paste -> home/away verify -> weather -> stats -> analysis
-
+“””
+SHARP ORACLE — HR Prop Model
+Clean architecture: lineup paste → home/away verify → weather → stats → bullpen ERA → analysis
+Output: TOP 5 HR BETS + TOP 5 HIT BETS only
+“””
 import json
 import re
 import threading
