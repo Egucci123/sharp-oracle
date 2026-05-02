@@ -1146,6 +1146,47 @@ class Handler(BaseHTTPRequestHandler):
             with store_lock:
                 snap = dict(jobs[jid])
             self._json(snap)
+        elif path == '/api/debug':
+            qs = parse_qs(urlparse(self.path).query)
+            name = qs.get('name', ['Elly De La Cruz'])[0]
+            result = {}
+
+            # Test 1: bulk leaderboard
+            url_lb = (f'https://baseballsavant.mlb.com/leaderboard/custom'
+                      f'?year=2026&type=batter&filter=&min=1'
+                      f'&selections=pa,woba,xwoba,barrel_batted_rate,avg_hit_speed,ev95percent'
+                      f'&chart=false&_{int(time.time())}')
+            raw_lb = savant_get(url_lb, accept_json=True, timeout=20)
+            result['leaderboard_bytes'] = len(raw_lb) if raw_lb else 0
+            result['leaderboard_status'] = 'OK' if raw_lb and len(raw_lb) > 100 else 'BLOCKED'
+
+            # Test 2: page scrape
+            slug = normalize_name(name).lower().replace(' ', '-')
+            url_pg = f'https://baseballsavant.mlb.com/savant-player/{slug}?season=2026'
+            raw_pg = savant_get(url_pg, timeout=15)
+            result['page_bytes'] = len(raw_pg) if raw_pg else 0
+            result['page_status'] = 'OK' if raw_pg and len(raw_pg) > 5000 else 'BLOCKED/EMPTY'
+
+            # Test 3: actual parse
+            if raw_pg and len(raw_pg) > 5000:
+                import re as _re
+                m2 = _re.search(
+                    r'\(2026\)\s*Avg\s*Exit\s*Vel[a-z]*:\s*([\d.]+)[,\s]*'
+                    r'Hard\s*Hit\s*%:\s*([\d.]+)[,\s]*'
+                    r'wOBA:\s*([.\d]+)[,\s]*'
+                    r'xwOBA:\s*([.\d]+)[,\s]*'
+                    r'Barrel\s*%:\s*([\d.]+)',
+                    raw_pg, _re.I
+                )
+                result['summary_line_found'] = bool(m2)
+                if m2:
+                    result['parsed'] = {'ev': m2.group(1), 'hh': m2.group(2),
+                                        'woba': m2.group(3), 'xwoba': m2.group(4), 'brl': m2.group(5)}
+
+            result['name_tested'] = name
+            result['slug'] = slug
+            self._json(result)
+
         elif path == '/api/rules':
             self._json({'rules': LOCKED_RULES, 'system': SYSTEM_PROMPT})
         else:
