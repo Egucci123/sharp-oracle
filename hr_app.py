@@ -1284,8 +1284,8 @@ tr.pitcher-row td{background:#06090f}
 
 <div id="panel-stats" class="panel">
   <div class="card">
-    <div class="card-title">Statcast — 2026</div>
-    <div style="font-size:10px;color:#334155;margin-bottom:4px;display:none" id="scrollHint">← scroll →</div>
+    <div class="card-title">Statcast - 2026</div>
+    <div style="font-size:10px;color:#334155;margin-bottom:4px;display:none" id="scrollHint">&lt; scroll &gt;</div>
   <div class="tbl-wrap" id="tblWrap">
       <table>
         <thead><tr>
@@ -1358,14 +1358,14 @@ function poll(){
 
 function updateSteps(steps){
   document.getElementById('steps').innerHTML=steps.map(s=>{
-    const icon=s.state==='done'?'✓':s.state==='active'?'◉':s.state==='error'?'✗':'○';
+    const icon=s.state==='done'?'OK':s.state==='active'?'*':s.state==='error'?'X':'o';
     return `<div class="step ${s.state}">${icon} ${s.label||''}</div>`;
   }).join('');
 }
 
 function showInfo(p,pen){
   const wc=(p.weather_flag||'').includes('SUPPRESSOR')||(p.weather_flag||'')==='DOME'?'warn':(p.weather_flag||'').includes('BOOST')?'good':'';
-  const temp=p.temp_f?p.temp_f+'°F':'N/A';
+  const temp=p.temp_f?p.temp_f+'F':'N/A';
   const wind=p.wind_mph?p.wind_mph+' mph':'N/A';
   const penHtml=Object.entries(pen||{}).map(([t,dd])=>{
     const era=dd.era?dd.era.toFixed(2):'N/A';
@@ -1375,7 +1375,7 @@ function showInfo(p,pen){
   document.getElementById('pillRow').innerHTML=`
     <div class="pill">Park: <b>${p.park||'?'}</b></div>
     <div class="pill">Type: <b>${p.category||'?'}</b></div>
-    <div class="pill ${wc}">Weather: <b>${temp} · ${p.weather_flag||'?'}</b></div>
+    <div class="pill ${wc}">Weather: <b>${temp} - ${p.weather_flag||'?'}</b></div>
     <div class="pill">Wind: <b>${wind}</b></div>${penHtml}`;
   document.getElementById('infoCard').style.display='';
 }
@@ -1383,19 +1383,19 @@ function showInfo(p,pen){
 function showStats(stats){
   try {
     const fv=(v,thr)=>{
-      if(v==null||v===undefined||v==='')return`<span class="na">—</span>`;
+      if(v==null||v===undefined||v==='')return`<span class="na">-</span>`;
       const n=parseFloat(v);
-      if(isNaN(n))return`<span class="na">—</span>`;
+      if(isNaN(n))return`<span class="na">-</span>`;
       return`<span class="${n>=thr?'hit':'miss'}">${thr<1?n.toFixed(3):n.toFixed(1)}</span>`;
     };
     const fw=v=>{
-      if(v==null||v===undefined||v==='')return`<span class="na">—</span>`;
+      if(v==null||v===undefined||v==='')return`<span class="na">-</span>`;
       const n=parseFloat(v);
-      return isNaN(n)?`<span class="na">—</span>`:n.toFixed(3);
+      return isNaN(n)?`<span class="na">-</span>`:n.toFixed(3);
     };
     const rows=stats.map(p=>{
       try{
-        const gap=p.gap!=null&&!isNaN(p.gap)?(p.gap>=0?'+':'')+parseFloat(p.gap).toFixed(3):'—';
+        const gap=p.gap!=null&&!isNaN(p.gap)?(p.gap>=0?'+':'')+parseFloat(p.gap).toFixed(3):'-';
         const gc=p.gap==null?'na':p.gap>=0.060?'hit':p.gap<=-0.060?'hot':'';
         return`<tr class="${p.role==='PITCHER'?'pitcher-row':''}">
           <td><b>${p.name||'?'}</b></td>
@@ -1409,10 +1409,10 @@ function showStats(stats){
           <td>${fw(p.woba)}</td>
           <td class="${gc}">${gap}</td>
           <td>${fv(p.sweet_spot_pct,38)}</td>
-          <td>${p.fetch_status==='ok'?'✓':'⚠'}</td>
+          <td>${p.fetch_status==='ok'?'OK':'!'}</td>
         </tr>`;
       }catch(e){
-        return`<tr><td colspan="12" style="color:#ef4444">${p.name||'?'} — render error</td></tr>`;
+        return`<tr><td colspan="12" style="color:#ef4444">${p.name||'?'} - render error</td></tr>`;
       }
     }).join('');
     document.getElementById('statBody').innerHTML=rows||'<tr><td colspan="12">No data</td></tr>';
