@@ -1148,8 +1148,25 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         cache_hits = sum(1 for x in all_statcast if 'leaderboard' in str(x.get('data_source','')))
         print(f"[STATS] {ok}/{len(all_statcast)} ok | {cache_hits} from leaderboard")
 
+        # Only store the fields the UI needs — keeps payload small for mobile
+        slim_statcast = []
+        for p in all_statcast:
+            slim_statcast.append({
+                'name':         p.get('name'),
+                'role':         p.get('role'),
+                'team':         p.get('team'),
+                'barrel_pct':   p.get('barrel_pct'),
+                'exit_velocity':p.get('exit_velocity'),
+                'ev50':         p.get('ev50'),
+                'hard_hit_pct': p.get('hard_hit_pct'),
+                'xwoba':        p.get('xwoba'),
+                'woba':         p.get('woba'),
+                'gap':          p.get('gap'),
+                'sweet_spot_pct': p.get('sweet_spot_pct'),
+                'fetch_status': p.get('fetch_status'),
+            })
         with store_lock:
-            jobs[jid]['statcast'] = all_statcast
+            jobs[jid]['statcast'] = slim_statcast
         step_set(jid, 2, 'done', f'Stats: {ok}/{len(all_statcast)} fetched')
 
         # STEP 4: Bullpen ERA
@@ -1206,7 +1223,7 @@ body{background:#0a0e1a;color:#e2e8f0;font-family:'Segoe UI',sans-serif;min-heig
 .nav-btn{flex-shrink:0;padding:10px 18px;font-size:12px;font-weight:700;color:#475569;background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;letter-spacing:.5px;white-space:nowrap;transition:all .15s}
 .nav-btn:hover{color:#94a3b8}
 .nav-btn.active{color:#f7c948;border-bottom-color:#f7c948}
-.panel{display:none;padding:12px;overflow-y:auto}
+.panel{display:none;padding:12px;overflow-y:auto;height:calc(100vh - 90px);-webkit-overflow-scrolling:touch}
 .panel.active{display:block}
 .card{background:#111827;border:1px solid #1e3a5f;border-radius:8px;padding:14px;margin-bottom:10px}
 .card-title{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#64748b;text-transform:uppercase;margin-bottom:8px}
@@ -1224,15 +1241,17 @@ textarea::placeholder{color:#1e3a5f}
 .pill-row{display:flex;gap:8px;flex-wrap:wrap}
 .pill{background:#0d1424;border:1px solid #1e3a5f;border-radius:16px;padding:4px 12px;font-size:11px;color:#64748b}
 .pill b{color:#f7c948}.pill.bad b{color:#ef4444}.pill.warn b{color:#f97316}.pill.good b{color:#22c55e}
-.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-table{width:100%;border-collapse:collapse;font-size:12px;min-width:540px}
-th{background:#080d18;padding:7px 8px;text-align:left;color:#475569;font-weight:600;font-size:10px;letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid #1e3a5f;white-space:nowrap}
-td{padding:6px 8px;border-bottom:1px solid #0d1424;white-space:nowrap}
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;width:100%}
+table{width:100%;border-collapse:collapse;font-size:11px;min-width:520px}
+th{background:#080d18;padding:6px 6px;text-align:left;color:#475569;font-weight:600;font-size:9px;letter-spacing:.8px;text-transform:uppercase;border-bottom:1px solid #1e3a5f;white-space:nowrap}
+td{padding:5px 6px;border-bottom:1px solid #0d1424;white-space:nowrap;font-size:11px}
+@media(max-width:600px){table{font-size:10px}th{font-size:8px;padding:5px 5px}td{padding:4px 5px}}
 tr:hover td{background:#0a0f1a}
 tr.pitcher-row td{background:#06090f}
 .hit{color:#22c55e;font-weight:700}.miss{color:#334155}.na{color:#1e3a5f}.hot{color:#ef4444}
-.result-box{background:#080d18;border:1px solid #1e3a5f;border-radius:6px;padding:16px;white-space:pre-wrap;font-family:'Courier New',monospace;font-size:13px;line-height:1.8;width:100%}
-@media(max-width:600px){.result-box{font-size:12px;padding:12px}.logo{font-size:1em;letter-spacing:2px}}
+.result-box{background:#080d18;border:1px solid #1e3a5f;border-radius:6px;padding:16px;white-space:pre-wrap;font-family:'Courier New',monospace;font-size:13px;line-height:1.8;width:100%;min-height:200px}
+.panel{-webkit-overflow-scrolling:touch}
+@media(max-width:600px){.result-box{font-size:11.5px;padding:12px;line-height:1.7}.logo{font-size:1em;letter-spacing:2px}}
 </style>
 </head>
 <body>
@@ -1265,7 +1284,8 @@ tr.pitcher-row td{background:#06090f}
 <div id="panel-stats" class="panel">
   <div class="card">
     <div class="card-title">Statcast — 2026</div>
-    <div class="tbl-wrap">
+    <div style="font-size:10px;color:#334155;margin-bottom:4px;display:none" id="scrollHint">← scroll →</div>
+  <div class="tbl-wrap" id="tblWrap">
       <table>
         <thead><tr>
           <th>Player</th><th>Role</th><th>Team</th>
@@ -1352,21 +1372,47 @@ function showInfo(p,pen){
 }
 
 function showStats(stats){
-  const fv=(v,thr)=>v==null?`<span class="na">—</span>`:`<span class="${v>=thr?'hit':'miss'}">${typeof v==='number'?(thr<1?v.toFixed(3):v.toFixed(1)):v}</span>`;
-  const fw=v=>v==null?`<span class="na">—</span>`:(typeof v==='number'?v.toFixed(3):v);
-  document.getElementById('statBody').innerHTML=stats.map(p=>{
-    const gap=p.gap!=null?(p.gap>=0?'+':'')+p.gap.toFixed(3):'—';
-    const gc=p.gap==null?'na':p.gap>=0.060?'hit':p.gap<=-0.060?'hot':'';
-    return `<tr class="${p.role==='PITCHER'?'pitcher-row':''}">
-      <td><b>${p.name||'?'}</b></td><td style="color:#475569">${p.role||'?'}</td><td style="color:#475569">${p.team||'?'}</td>
-      <td>${fv(p.barrel_pct,15)}</td><td>${fv(p.exit_velocity,91)}</td><td>${fv(p.ev50,100)}</td>
-      <td>${fv(p.hard_hit_pct,50)}</td><td>${fv(p.xwoba,0.350)}</td><td>${fw(p.woba)}</td>
-      <td class="${gc}">${gap}</td><td>${fv(p.sweet_spot_pct,38)}</td>
-      <td>${p.fetch_status==='ok'?'<span class="hit">✓</span>':'<span class="na">⚠</span>'}</td>
-    </tr>`;
-  }).join('');
+  try {
+    const fv=(v,thr)=>{
+      if(v==null||v===undefined||v==='')return`<span class="na">—</span>`;
+      const n=parseFloat(v);
+      if(isNaN(n))return`<span class="na">—</span>`;
+      return`<span class="${n>=thr?'hit':'miss'}">${thr<1?n.toFixed(3):n.toFixed(1)}</span>`;
+    };
+    const fw=v=>{
+      if(v==null||v===undefined||v==='')return`<span class="na">—</span>`;
+      const n=parseFloat(v);
+      return isNaN(n)?`<span class="na">—</span>`:n.toFixed(3);
+    };
+    const rows=stats.map(p=>{
+      try{
+        const gap=p.gap!=null&&!isNaN(p.gap)?(p.gap>=0?'+':'')+parseFloat(p.gap).toFixed(3):'—';
+        const gc=p.gap==null?'na':p.gap>=0.060?'hit':p.gap<=-0.060?'hot':'';
+        return`<tr class="${p.role==='PITCHER'?'pitcher-row':''}">
+          <td><b>${p.name||'?'}</b></td>
+          <td>${p.role||'?'}</td>
+          <td>${p.team||'?'}</td>
+          <td>${fv(p.barrel_pct,15)}</td>
+          <td>${fv(p.exit_velocity,91)}</td>
+          <td>${fv(p.ev50,100)}</td>
+          <td>${fv(p.hard_hit_pct,50)}</td>
+          <td>${fv(p.xwoba,0.350)}</td>
+          <td>${fw(p.woba)}</td>
+          <td class="${gc}">${gap}</td>
+          <td>${fv(p.sweet_spot_pct,38)}</td>
+          <td>${p.fetch_status==='ok'?'✓':'⚠'}</td>
+        </tr>`;
+      }catch(e){
+        return`<tr><td colspan="12" style="color:#ef4444">${p.name||'?'} — render error</td></tr>`;
+      }
+    }).join('');
+    document.getElementById('statBody').innerHTML=rows||'<tr><td colspan="12">No data</td></tr>';
+  } catch(e) {
+    document.getElementById('statBody').innerHTML=`<tr><td colspan="12" style="color:#ef4444">Error: ${e.message}</td></tr>`;
+  }
   if(document.getElementById('panel-analyze').classList.contains('active'))
     show('stats',document.querySelectorAll('.nav-btn')[1]);
+  if(window.innerWidth < 600) document.getElementById('scrollHint').style.display='block';
 }
 </script>
 </body>
@@ -1378,11 +1424,13 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[{self.command}] {self.path} {args[1] if len(args)>1 else ''}")
 
     def _json(self, data, code=200):
-        body = json.dumps(data).encode()
+        body = json.dumps(data, default=str).encode()
         self.send_response(code)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', len(body))
         self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+        self.send_header('Pragma', 'no-cache')
         self.end_headers()
         self.wfile.write(body)
 
