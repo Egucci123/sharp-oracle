@@ -1317,8 +1317,6 @@ function show(name,btn){
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
   if(btn)btn.classList.add('active');
-  // Always re-render stats table with latest data when switching to stats tab
-  if(name==='stats' && lastStatcast.length>0) renderStats(lastStatcast);
 }
 
 function runModel(){
