@@ -1156,174 +1156,289 @@ HTML = r"""<!DOCTYPE html>
 <title>Sharp Oracle</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#0a0e1a;color:#e2e8f0;font-family:'Segoe UI',sans-serif;min-height:100vh;padding:20px}
-h1{text-align:center;font-size:1.8em;font-weight:800;letter-spacing:2px;color:#f7c948;margin-bottom:20px}
-.card{background:#111827;border:1px solid #1e3a5f;border-radius:12px;padding:20px;margin-bottom:16px}
-textarea{width:100%;background:#0d1424;color:#e2e8f0;border:1px solid #1e3a5f;border-radius:8px;
-  padding:12px;font-size:14px;resize:vertical;min-height:200px;font-family:monospace}
-button{background:#f7c948;color:#0a0e1a;border:none;border-radius:8px;padding:12px 24px;
-  font-size:15px;font-weight:700;cursor:pointer;width:100%;margin-top:10px}
-button:hover{background:#e6b800}
-button:disabled{background:#333;color:#666;cursor:not-allowed}
-.steps{display:flex;flex-direction:column;gap:8px;margin-top:12px}
-.step{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;
-  background:#0d1424;border:1px solid #1e3a5f;font-size:13px}
-.step.active{border-color:#f7c948;color:#f7c948}
-.step.done{border-color:#22c55e;color:#22c55e}
-.step.error{border-color:#ef4444;color:#ef4444}
-.dot{width:10px;height:10px;border-radius:50%;background:currentColor;flex-shrink:0}
-.stat-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
-.stat-table th{background:#1e3a5f;padding:6px 10px;text-align:left;color:#94a3b8;font-weight:600}
-.stat-table td{padding:6px 10px;border-bottom:1px solid #1e293b}
-.stat-table tr:hover td{background:#1a2744}
-.ok{color:#22c55e}.na{color:#64748b}
-.result{background:#0d1424;border:1px solid #22c55e;border-radius:8px;padding:16px;
-  white-space:pre-wrap;font-family:monospace;font-size:14px;line-height:1.6;margin-top:12px}
-.park-bar{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;font-size:13px}
-.park-pill{background:#1e3a5f;border-radius:20px;padding:4px 12px;color:#94a3b8}
-.park-pill span{color:#f7c948;font-weight:700}
+body{background:#080d18;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+/* ── HEADER ── */
+.header{background:linear-gradient(135deg,#0a0e1a 0%,#111827 100%);border-bottom:1px solid #1e3a5f;
+  padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+.logo{font-size:1.4em;font-weight:900;letter-spacing:3px;color:#f7c948;text-shadow:0 0 20px rgba(247,201,72,.3)}
+.logo span{color:#fff;font-weight:300}
+.status-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:6px;
+  box-shadow:0 0 8px #22c55e}
+.header-right{font-size:12px;color:#64748b;display:flex;align-items:center;gap:16px}
+/* ── TABS ── */
+.tabs{background:#0d1424;border-bottom:1px solid #1e3a5f;display:flex;padding:0 24px;gap:0}
+.tab{padding:12px 20px;font-size:13px;font-weight:600;color:#64748b;cursor:pointer;
+  border-bottom:2px solid transparent;transition:all .2s;letter-spacing:.5px}
+.tab:hover{color:#94a3b8}
+.tab.active{color:#f7c948;border-bottom-color:#f7c948}
+.tab-content{display:none;padding:20px 24px}
+.tab-content.active{display:block}
+/* ── CARDS ── */
+.card{background:#111827;border:1px solid #1e3a5f;border-radius:10px;padding:18px;margin-bottom:14px}
+.card-title{font-size:11px;font-weight:700;letter-spacing:1.5px;color:#64748b;text-transform:uppercase;margin-bottom:12px}
+/* ── INPUT ── */
+textarea{width:100%;background:#0a0e1a;color:#e2e8f0;border:1px solid #1e3a5f;border-radius:8px;
+  padding:14px;font-size:13px;resize:vertical;min-height:220px;font-family:'Courier New',monospace;
+  line-height:1.5;transition:border-color .2s}
+textarea:focus{outline:none;border-color:#f7c948}
+textarea::placeholder{color:#334155}
+/* ── BUTTON ── */
+.btn{background:linear-gradient(135deg,#f7c948,#e6a800);color:#0a0e1a;border:none;border-radius:8px;
+  padding:13px 24px;font-size:14px;font-weight:800;cursor:pointer;width:100%;margin-top:10px;
+  letter-spacing:.5px;transition:all .2s;text-transform:uppercase}
+.btn:hover{transform:translateY(-1px);box-shadow:0 4px 20px rgba(247,201,72,.4)}
+.btn:disabled{background:#1e293b;color:#475569;cursor:not-allowed;transform:none;box-shadow:none}
+/* ── STEPS ── */
+.steps{display:flex;flex-direction:column;gap:6px}
+.step{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:8px;
+  background:#0a0e1a;border:1px solid #1e293b;font-size:13px;color:#475569;transition:all .3s}
+.step.active{border-color:#f7c948;color:#f7c948;background:#1a1400}
+.step.done{border-color:#22c55e;color:#22c55e;background:#001a0a}
+.step.error{border-color:#ef4444;color:#ef4444;background:#1a0000}
+.step-icon{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:700;flex-shrink:0;border:1px solid currentColor}
+/* ── INFO BAR ── */
+.info-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.pill{background:#0d1424;border:1px solid #1e3a5f;border-radius:20px;padding:5px 14px;
+  font-size:12px;color:#64748b;display:flex;align-items:center;gap:6px}
+.pill b{color:#f7c948;font-weight:700}
+.pill.warn b{color:#f97316}
+.pill.good b{color:#22c55e}
+.pill.bad b{color:#ef4444}
+/* ── STAT TABLE ── */
+.stat-wrap{overflow-x:auto}
+.stat-table{width:100%;border-collapse:collapse;font-size:12px;min-width:600px}
+.stat-table th{background:#0d1424;padding:8px 10px;text-align:left;color:#64748b;
+  font-weight:600;font-size:11px;letter-spacing:.8px;text-transform:uppercase;
+  border-bottom:1px solid #1e3a5f;white-space:nowrap}
+.stat-table td{padding:7px 10px;border-bottom:1px solid #0d1424;font-size:12px;white-space:nowrap}
+.stat-table tr:hover td{background:#0f1929}
+.stat-table .pitcher{background:#0a0f1a}
+.hit{color:#22c55e;font-weight:700}
+.miss{color:#475569}
+.na{color:#334155}
+.warn-cell{color:#f97316}
+/* ── RESULT ── */
+.result-wrap{background:#0a0e1a;border:1px solid #1e3a5f;border-radius:10px;padding:20px;margin-top:4px}
+.result-text{white-space:pre-wrap;font-family:'Courier New',monospace;font-size:13px;
+  line-height:1.8;color:#e2e8f0}
+.result-text strong, .result-section{color:#f7c948;font-weight:700}
+/* ── HR/HIT PICKS STYLING ── */
+.picks{display:flex;flex-direction:column;gap:12px;margin-top:8px}
+.pick-card{background:#0d1424;border:1px solid #1e3a5f;border-radius:8px;padding:14px}
+.pick-card.hr{border-left:3px solid #ef4444}
+.pick-card.hit{border-left:3px solid #22c55e}
+.pick-header{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.pick-rank{font-size:11px;font-weight:700;color:#64748b}
+.pick-name{font-size:14px;font-weight:700;color:#f7c948}
+.pick-odds{font-size:12px;color:#94a3b8;margin-left:auto}
+.pick-reason{font-size:12px;color:#94a3b8;line-height:1.5}
 </style>
 </head>
 <body>
-<h1>⚡ SHARP ORACLE</h1>
 
-<div class="card">
-  <textarea id="lineup" placeholder="Paste lineup here...&#10;&#10;Format: Team1 @ Team2&#10;Pitcher name...&#10;Batter list..."></textarea>
-  <button id="runBtn" onclick="runModel()">RUN MODEL</button>
+<div class="header">
+  <div class="logo">⚡ SHARP<span> ORACLE</span></div>
+  <div class="header-right">
+    <span><span class="status-dot"></span>LIVE</span>
+    <span id="cacheStatus">Loading...</span>
+  </div>
 </div>
 
-<div class="card" id="parkCard" style="display:none">
-  <div class="park-bar" id="parkBar"></div>
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('analyze')">ANALYZE</div>
+  <div class="tab" onclick="switchTab('stats')">STATCAST</div>
+  <div class="tab" onclick="switchTab('result')">PICKS</div>
 </div>
 
-<div class="card" id="stepsCard" style="display:none">
-  <div class="steps" id="steps"></div>
+<div id="tab-analyze" class="tab-content active">
+  <div class="card">
+    <div class="card-title">Lineup Input</div>
+    <textarea id="lineup" placeholder="Paste lineup here...
+
+Format: AwayTeam @ HomeTeam
+Pitcher Name (Hand) ERA
+Batter Name (Hand) Position
+..."></textarea>
+    <button class="btn" id="runBtn" onclick="runModel()">▶ RUN MODEL</button>
+  </div>
+
+  <div class="card" id="stepsCard" style="display:none">
+    <div class="card-title">Progress</div>
+    <div class="steps" id="steps"></div>
+  </div>
+
+  <div class="card" id="infoCard" style="display:none">
+    <div class="card-title">Game Info</div>
+    <div class="info-bar" id="infoBar"></div>
+  </div>
 </div>
 
-<div class="card" id="statsCard" style="display:none">
-  <table class="stat-table">
-    <thead><tr>
-      <th>Player</th><th>Role</th><th>BRL%</th><th>EV</th><th>HH%</th>
-      <th>xwOBA</th><th>wOBA</th><th>GAP</th><th>STATUS</th>
-    </tr></thead>
-    <tbody id="statBody"></tbody>
-  </table>
+<div id="tab-stats" class="tab-content">
+  <div class="card">
+    <div class="card-title">Statcast Pull</div>
+    <div class="stat-wrap">
+      <table class="stat-table">
+        <thead><tr>
+          <th>Player</th><th>Role</th><th>Team</th>
+          <th>BRL%</th><th>EV</th><th>EV50</th><th>HH%</th>
+          <th>xwOBA</th><th>wOBA</th><th>GAP</th><th>SS%</th><th>Status</th>
+        </tr></thead>
+        <tbody id="statBody"><tr><td colspan="12" class="na" style="padding:20px;text-align:center">Run a lineup to see stats</td></tr></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
-<div class="card" id="resultCard" style="display:none">
-  <div class="result" id="result"></div>
+<div id="tab-result" class="tab-content">
+  <div class="card" id="resultCard">
+    <div class="card-title">Sharp Oracle Picks</div>
+    <div class="result-wrap">
+      <div class="result-text" id="result">Run a lineup to see picks...</div>
+    </div>
+  </div>
 </div>
 
 <script>
 let pollTimer = null;
 let curJid = null;
 
+// Check cache status on load
+fetch('/api/status').then(r=>r.json()).then(d=>{
+  const el = document.getElementById('cacheStatus');
+  const n = d.cache_players || 0;
+  if(n > 100) el.innerHTML = `<span style="color:#22c55e">${n} players cached</span>`;
+  else el.innerHTML = `<span style="color:#f97316">Cache loading...</span>`;
+}).catch(()=>{});
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i)=>{
+    const names = ['analyze','stats','result'];
+    t.classList.toggle('active', names[i]===name);
+  });
+  document.querySelectorAll('.tab-content').forEach(c=>{
+    c.classList.toggle('active', c.id==='tab-'+name);
+  });
+}
+
 function runModel() {
   const txt = document.getElementById('lineup').value.trim();
   if (!txt) return;
   document.getElementById('runBtn').disabled = true;
-  document.getElementById('resultCard').style.display = 'none';
-  document.getElementById('statsCard').style.display = 'none';
-  document.getElementById('parkCard').style.display = 'none';
-  document.getElementById('stepsCard').style.display = 'none';
+  document.getElementById('result').textContent = 'Analyzing...';
+  document.getElementById('stepsCard').style.display = '';
+  document.getElementById('infoCard').style.display = 'none';
+  switchTab('analyze');
 
-  fetch('/api/start', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({lineup: txt})
-  })
-  .then(r => r.json())
-  .then(d => {
+  fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({lineup:txt})})
+  .then(r=>r.json())
+  .then(d=>{
     curJid = d.jid;
-    document.getElementById('stepsCard').style.display = '';
     pollTimer = setInterval(poll, 1500);
   })
-  .catch(e => {
+  .catch(e=>{
     document.getElementById('runBtn').disabled = false;
-    alert('Error: ' + e);
+    alert('Error: '+e);
   });
 }
 
 function poll() {
   if (!curJid) return;
-  fetch('/api/poll?jid=' + curJid)
-  .then(r => r.json())
-  .then(d => {
-    updateSteps(d.steps || []);
-    if (d.park_confirm && Object.keys(d.park_confirm).length > 0) {
-      showPark(d.park_confirm, d.bullpen || {});
-    }
-    if (d.statcast && d.statcast.length > 0) {
-      showStats(d.statcast);
-    }
-    if (d.status === 'done') {
+  fetch('/api/poll?jid='+curJid)
+  .then(r=>r.json())
+  .then(d=>{
+    updateSteps(d.steps||[]);
+    if(d.park_confirm && Object.keys(d.park_confirm).length>0) showInfo(d.park_confirm, d.bullpen||{});
+    if(d.statcast && d.statcast.length>0) showStats(d.statcast);
+    if(d.status==='done'){
       clearInterval(pollTimer);
-      document.getElementById('result').textContent = d.result || '';
-      document.getElementById('resultCard').style.display = '';
+      document.getElementById('result').textContent = d.result||'';
       document.getElementById('runBtn').disabled = false;
-    } else if (d.status === 'error') {
+      switchTab('result');
+      // refresh cache status
+      fetch('/api/status').then(r=>r.json()).then(s=>{
+        const el = document.getElementById('cacheStatus');
+        el.innerHTML = `<span style="color:#22c55e">${s.cache_players||0} players cached</span>`;
+      });
+    } else if(d.status==='error'){
       clearInterval(pollTimer);
-      document.getElementById('result').textContent = 'Error: ' + (d.error || 'unknown');
-      document.getElementById('resultCard').style.display = '';
+      document.getElementById('result').textContent = 'Error: '+(d.error||'unknown');
       document.getElementById('runBtn').disabled = false;
+      switchTab('result');
     }
   })
-  .catch(() => {});
+  .catch(()=>{});
 }
 
 function updateSteps(steps) {
-  const c = document.getElementById('steps');
-  document.getElementById('stepsCard').style.display = '';
-  c.innerHTML = steps.map(s =>
-    `<div class="step ${s.state}"><div class="dot"></div>${s.label || ''}</div>`
-  ).join('');
+  const icons = ['◎','◉','✓','✓','✓'];
+  document.getElementById('steps').innerHTML = steps.map((s,i)=>{
+    const icon = s.state==='done'?'✓':s.state==='active'?'◉':s.state==='error'?'✗':'○';
+    return `<div class="step ${s.state}">
+      <div class="step-icon">${icon}</div>
+      <span>${s.label||''}</span>
+    </div>`;
+  }).join('');
 }
 
-function showPark(p, pen) {
-  const bar = document.getElementById('parkBar');
-  const temp = p.temp_f ? p.temp_f + '°F' : 'N/A';
-  const wind = p.wind_mph ? p.wind_mph + ' mph' : 'N/A';
-  let penStr = '';
-  if (pen && Object.keys(pen).length > 0) {
-    penStr = Object.entries(pen).map(([t,d]) => {
-      const era = d.era ? d.era.toFixed(2) : 'N/A';
-      return `<div class="park-pill">${t} Pen: <span>${era} [${d.tier}]</span></div>`;
+function showInfo(p, pen) {
+  const flag = p.weather_flag||'';
+  const flagClass = flag.includes('SUPPRESSOR')||flag.includes('DOME') ? 'warn' :
+                    flag.includes('BOOST') ? 'good' : '';
+  const temp = p.temp_f ? p.temp_f+'°F' : 'N/A';
+  const wind = p.wind_mph ? p.wind_mph+' mph' : 'N/A';
+  let penHtml = '';
+  if(pen && Object.keys(pen).length>0) {
+    penHtml = Object.entries(pen).map(([t,dd])=>{
+      const era = dd.era ? dd.era.toFixed(2) : 'N/A';
+      const cls = dd.tier==='WEAK' ? 'bad' : dd.tier==='AVERAGE' ? 'warn' : 'good';
+      return `<div class="pill ${cls}">${t} Pen: <b>${era} [${dd.tier}]</b></div>`;
     }).join('');
   }
-  bar.innerHTML = `
-    <div class="park-pill">Park: <span>${p.park}</span></div>
-    <div class="park-pill">Cat: <span>${p.category}</span></div>
-    <div class="park-pill">Temp: <span>${temp}</span></div>
-    <div class="park-pill">Wind: <span>${wind}</span></div>
-    <div class="park-pill">Weather: <span>${p.weather_flag}</span></div>
-    ${penStr}
+  document.getElementById('infoBar').innerHTML = `
+    <div class="pill">Park: <b>${p.park||'?'}</b></div>
+    <div class="pill">Category: <b>${p.category||'?'}</b></div>
+    <div class="pill ${flagClass}">Temp: <b>${temp} ${flag}</b></div>
+    <div class="pill">Wind: <b>${wind}</b></div>
+    ${penHtml}
   `;
-  document.getElementById('parkCard').style.display = '';
+  document.getElementById('infoCard').style.display = '';
 }
 
 function showStats(stats) {
-  const f = (v, threshold, inverse) => {
-    if (v == null) return `<span class="na">N/A</span>`;
-    const hi = inverse ? v <= threshold : v >= threshold;
-    return `<span class="${hi ? 'ok' : ''}">${v}</span>`;
+  const fv = (v, thr) => {
+    if(v==null) return `<span class="na">—</span>`;
+    const ok = v>=thr;
+    return `<span class="${ok?'hit':'miss'}">${typeof v==='number'?v.toFixed(1):v}</span>`;
   };
-  document.getElementById('statBody').innerHTML = stats.map(p => {
-    const st = p.fetch_status === 'ok' ? '✓' : `⚠ ${p.fetch_status}`;
-    const stCls = p.fetch_status === 'ok' ? 'ok' : 'na';
-    const gap = p.gap != null ? (p.gap >= 0 ? '+' : '') + p.gap : 'N/A';
-    return `<tr>
-      <td>${p.name || '?'}</td>
-      <td>${p.role || '?'}</td>
-      <td>${f(p.barrel_pct, 15)}</td>
-      <td>${f(p.exit_velocity, 91)}</td>
-      <td>${f(p.hard_hit_pct, 50)}</td>
-      <td>${f(p.xwoba, 0.350)}</td>
-      <td>${p.woba != null ? p.woba : '<span class="na">N/A</span>'}</td>
-      <td>${gap}</td>
-      <td class="${stCls}">${st}</td>
+  const fw = (v) => v==null ? `<span class="na">—</span>` : v;
+
+  document.getElementById('statBody').innerHTML = stats.map(p=>{
+    const gap = p.gap!=null ? (p.gap>=0?'+':'')+p.gap.toFixed(3) : '—';
+    const gapCls = p.gap==null ? 'na' : p.gap>=0.060 ? 'hit' : p.gap<=-0.060 ? 'warn-cell' : '';
+    const st = p.fetch_status==='ok' ? '<span class="hit">✓</span>' :
+               `<span class="warn-cell">⚠ ${p.fetch_status}</span>`;
+    const rowCls = p.role==='PITCHER' ? 'pitcher' : '';
+    return `<tr class="${rowCls}">
+      <td><b>${p.name||'?'}</b></td>
+      <td>${p.role||'?'}</td>
+      <td>${p.team||'?'}</td>
+      <td>${fv(p.barrel_pct,15)}</td>
+      <td>${fv(p.exit_velocity,91)}</td>
+      <td>${fv(p.ev50,100)}</td>
+      <td>${fv(p.hard_hit_pct,50)}</td>
+      <td>${fv(p.xwoba,0.350)}</td>
+      <td>${fw(p.woba!=null?p.woba.toFixed(3):null)}</td>
+      <td class="${gapCls}">${gap}</td>
+      <td>${fv(p.sweet_spot_pct,38)}</td>
+      <td>${st}</td>
     </tr>`;
   }).join('');
-  document.getElementById('statsCard').style.display = '';
+  // Auto switch to stats tab when data arrives
+  // (don't switch if already on result tab)
+  const active = document.querySelector('.tab.active');
+  if(active && active.textContent==='ANALYZE') switchTab('stats');
 }
 </script>
 </body>
