@@ -1422,7 +1422,7 @@ function showStats(stats){
   if(document.getElementById('panel-analyze').classList.contains('active'))
     show('stats',document.querySelectorAll('.nav-btn')[1]);
   if(window.innerWidth < 600) document.getElementById('scrollHint').style.display='block';
-}}
+}
 </script>
 </body>
 </html>"""
