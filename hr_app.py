@@ -38,10 +38,19 @@ LOCKED_RULES = """
 PITCHER GATE (contact allowed, 0-4 pts):
   EV>=93 | HH%>=50 | xwOBA>=.350 | Barrel%>=15 = 1pt each
   0-1=OPEN | 2=HALF | 3-4=CLOSED
+  GB%>=55=ELITE-SUPPRESSOR(closes gate half step) | CSW%>=30=ELITE-MISS suppressor
 
 BATTER GRADE (0-4 pts):
   Barrel%>=15 | xwOBA>=.350 | EV>=91 | HH%>=50 = 1pt each
-  A=3.5-4/4+fav platoon | A-=4/4+same OR 3.5/4+fav | B+=situational | B=dart | C=override only
+  A=4/4+fav | A-=4/4+same OR 3/4+fav | B+=2/4+fav | B=dart | C=override only
+
+NEW CONTACT METRICS (use in analysis):
+  EV50>=103=ELITE power tier | EV50>=100=PLUS | EV50<95=weak contact
+  Sweet Spot%>=38=elite launch angle profile (HR zone consistently)
+  FB/LD EV>=95=elite fly ball contact | FB/LD EV<88=weak fly ball
+  Avg HR Dist>=410=elite carry | Avg HR Dist<380=weak carry
+  Barrel/PA%>=10=elite true power rate (more stable than Barrel/BBE)
+  GB EV = pitcher suppressor signal: high GB EV = harder to suppress
 
 PLATOON: LHB vs RHP=fav | RHB vs LHP=fav | Switch=fav | Same-side=drops half grade
 GAP: xwOBA-wOBA. Positive=COLD(buy). Negative=HOT(fade for HR, good for hits).
@@ -184,10 +193,68 @@ def call_claude(messages, system=None, max_tokens=4096):
 _stats_cache = {}
 _stats_loaded = False
 _stats_lock = threading.Lock()
+_csv_dir = os.path.dirname(os.path.abspath(__file__))
+
+def _download_csvs():
+    """Download Savant CSVs fresh. Called at startup and daily at midnight."""
+    urls = [
+        # Exit velocity CSV — has ev50, fbld, gb_ev, sweet_spot%, avg_hr_dist, max_hit_speed
+        ('statcast_batters.csv',
+         f'https://baseballsavant.mlb.com/leaderboard/statcast'
+         f'?type=batter&year={CURRENT_YEAR}&position=&team=&min=1&csv=true'),
+        ('statcast_pitchers.csv',
+         f'https://baseballsavant.mlb.com/leaderboard/statcast'
+         f'?type=pitcher&year={CURRENT_YEAR}&position=&team=&min=1&csv=true'),
+        # Expected stats CSV — has xwOBA, wOBA, barrel_batted_rate, hard_hit_percent
+        ('expected_batters.csv',
+         f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
+         f'?type=batter&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
+        ('expected_pitchers.csv',
+         f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
+         f'?type=pitcher&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
+    ]
+    for filename, url in urls:
+        try:
+            path = os.path.join(_csv_dir, filename)
+            raw = savant_get(url, accept_json=True, timeout=30)
+            if raw and len(raw) > 1000 and not raw.strip().startswith('<'):
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(raw)
+                print(f"[CSV DOWNLOAD] {filename} — {len(raw)} bytes")
+            else:
+                print(f"[CSV DOWNLOAD] {filename} — FAILED (got HTML or empty)")
+        except Exception as e:
+            print(f"[CSV DOWNLOAD] {filename} — ERROR: {e}")
+
+def _daily_refresh_loop():
+    """Background thread: refresh CSVs once at startup, then daily at midnight ET."""
+    import datetime
+    # Initial download at startup
+    print("[CSV REFRESH] Initial download starting...")
+    _download_csvs()
+    print("[CSV REFRESH] Initial download complete")
+    # Then reset cache and re-download at midnight every day
+    while True:
+        now = datetime.datetime.utcnow()
+        # Midnight UTC = 8pm ET / 7pm CT — good time for next-day data
+        tomorrow = (now + datetime.timedelta(days=1)).replace(
+            hour=0, minute=5, second=0, microsecond=0)
+        sleep_secs = (tomorrow - now).total_seconds()
+        print(f"[CSV REFRESH] Next refresh in {sleep_secs/3600:.1f} hours")
+        time.sleep(max(sleep_secs, 3600))
+        print("[CSV REFRESH] Daily refresh starting...")
+        _download_csvs()
+        # Reset cache so next run picks up fresh data
+        with _stats_lock:
+            global _stats_cache, _stats_loaded
+            _stats_cache = {}
+            _stats_loaded = False
+        print("[CSV REFRESH] Daily refresh complete — cache cleared")
 
 def load_stats_cache():
     """
-    Pull Savant leaderboards. Tries multiple endpoints.
+    Load stats from auto-downloaded CSV files (statcast_batters.csv, etc).
+    Falls back to live endpoints if files not yet downloaded.
     Returns dict keyed by normalized player name.
     """
     global _stats_cache, _stats_loaded
@@ -196,95 +263,99 @@ def load_stats_cache():
             return _stats_cache
         _stats_cache = {}
 
-    def try_parse(raw, player_type):
-        """Try to parse JSON from raw response, handling HTML wrappers."""
-        if not raw:
-            return []
-        raw = raw.strip()
-        # Direct JSON
-        if raw.startswith('[') or raw.startswith('{'):
-            try:
-                data = json.loads(raw)
-                return data if isinstance(data, list) else data.get('data', [])
-            except Exception:
-                pass
-        # HTML with embedded JSON — look for JS variable assignments
-        for pattern in [
-            r'var\s+data\s*=\s*(\[.*?\])\s*;',
-            r'"data"\s*:\s*(\[.*?\])',
-            r'initData\((\[.*?\])\)',
-        ]:
-            m = re.search(pattern, raw, re.DOTALL)
-            if m:
-                try:
-                    return json.loads(m.group(1))
-                except Exception:
-                    pass
-        return []
+    def parse_name(row):
+        """Extract player name from CSV or JSON row."""
+        lf = row.get('last_name, first_name', '')
+        if lf:
+            parts = lf.split(',', 1)
+            if len(parts) == 2:
+                return f"{parts[1].strip()} {parts[0].strip()}"
+        return (row.get('name_display_first_last') or
+                row.get('player_name') or row.get('name') or
+                f"{row.get('first_name','')} {row.get('last_name','')}".strip()).strip(' ,')
 
-    def pull_endpoint(url, player_type):
-        raw = savant_get(url, accept_json=True, timeout=25)
-        if not raw:
-            return 0
-        raw = raw.strip().lstrip('\ufeff')  # strip BOM
-
-        # Parse CSV (expected_statistics endpoint returns CSV)
-        rows = []
-        if raw.startswith('"') or (not raw.startswith('{') and not raw.startswith('[')):
-            try:
-                import csv, io
-                reader = csv.DictReader(io.StringIO(raw))
-                rows = [dict(r) for r in reader]
-            except Exception as e:
-                print(f"[CSV parse error] {e}")
-        else:
-            # JSON fallback
-            try:
-                data = json.loads(raw)
-                rows = data if isinstance(data, list) else data.get('data', [])
-            except Exception:
-                pass
-
+    def pull_rows(rows):
+        """Store/merge a list of player rows into the stats cache."""
         count = 0
         for row in rows:
-            # CSV: "last_name, first_name" field OR JSON name fields
-            name = ''
-            # CSV expected_statistics format: "last_name, first_name"
-            lf = row.get('last_name, first_name', '')
-            if lf:
-                # "De La Cruz, Elly" -> "Elly De La Cruz"
-                parts = lf.split(',', 1)
-                if len(parts) == 2:
-                    name = f"{parts[1].strip()} {parts[0].strip()}"
-            if not name:
-                name = (row.get('name_display_first_last') or
-                        row.get('player_name') or row.get('name') or
-                        f"{row.get('first_name','')} {row.get('last_name','')}".strip()).strip(' ,')
+            name = parse_name(row)
             if name and len(name) > 2:
                 key = normalize_name(name).lower()
-                _stats_cache[key] = row
+                if key in _stats_cache:
+                    for k, v in row.items():
+                        if v not in ('', None, 'null', 'None', 'NaN'):
+                            _stats_cache[key][k] = v
+                else:
+                    _stats_cache[key] = dict(row)
                 count += 1
         return count
 
-    # PASS 1: expected_statistics CSV — gets xwOBA, wOBA, xBA, xSLG for all players
-    for player_type in ['batter', 'pitcher']:
-        url = (f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
-               f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1&csv=false')
-        n = pull_endpoint(url, player_type)
-        print(f"[STATS CACHE] pass1 {player_type}={n}")
+    def parse_raw(raw):
+        """Parse CSV or JSON text into list of dicts."""
+        if not raw:
+            return []
+        raw = raw.strip().lstrip('\ufeff')
+        if raw.startswith('"') or (not raw.startswith('{') and not raw.startswith('[')):
+            try:
+                import csv as _csv2, io as _io2
+                reader = _csv2.DictReader(_io2.StringIO(raw))
+                return [dict(r) for r in reader]
+            except Exception as e:
+                print(f"[CSV parse error] {e}")
+                return []
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, list) else data.get('data', [])
+        except Exception:
+            return []
 
-    # PASS 2: custom leaderboard CSV — gets EV, HH%, Barrel%, GB%, CSW%
-    # Use csv=true to force CSV response instead of HTML
-    for player_type in ['batter', 'pitcher']:
-        url = (f'https://baseballsavant.mlb.com/leaderboard/custom'
-               f'?year={CURRENT_YEAR}&type={player_type}&filter=&min=1'
-               f'&selections=pa,avg_hit_speed,ev95percent,barrel_batted_rate,'
-               f'groundballs_percent,hard_hit_percent,woba,est_woba'
-               f'&chart=false&csv=true')
-        n = pull_endpoint(url, player_type)
-        print(f"[STATS CACHE] pass2 {player_type}={n}")
+    def pull_endpoint(url, player_type):
+        raw = savant_get(url, accept_json=True, timeout=25)
+        return pull_rows(parse_raw(raw))
 
-    print(f"[STATS CACHE] Total={len(_stats_cache)}")
+    def pull_endpoint_raw(raw, player_type):
+        return pull_rows(parse_raw(raw))
+
+    import os as _os
+
+    def load_local(filename):
+        path = _os.path.join(_csv_dir, filename)
+        if _os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8-sig') as f:
+                    return f.read()
+            except Exception:
+                pass
+        return None
+
+    # PASS 1: statcast leaderboard — EV, HH%, Barrel%, GB% (auto-downloaded daily)
+    for player_type, filename in [('batter', 'statcast_batters.csv'),
+                                   ('pitcher', 'statcast_pitchers.csv')]:
+        raw = load_local(filename)
+        if raw:
+            n = pull_endpoint_raw(raw, player_type)
+            print(f"[STATS CACHE] {filename}={n} rows")
+        else:
+            # File not yet downloaded — try live
+            url = (f'https://baseballsavant.mlb.com/leaderboard/statcast'
+                   f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1&csv=true')
+            n = pull_endpoint(url, player_type)
+            print(f"[STATS CACHE] live statcast {player_type}={n}")
+
+    # PASS 2: expected_statistics — xwOBA, wOBA (merges into existing entries)
+    for player_type, filename in [('batter', 'expected_batters.csv'),
+                                   ('pitcher', 'expected_pitchers.csv')]:
+        raw = load_local(filename)
+        if raw:
+            n = pull_endpoint_raw(raw, player_type)
+            print(f"[STATS CACHE] {filename}={n} rows")
+        else:
+            url = (f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
+                   f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1&csv=false')
+            n = pull_endpoint(url, player_type)
+            print(f"[STATS CACHE] live expected_stats {player_type}={n}")
+
+    print(f"[STATS CACHE] Total players={len(_stats_cache)}")
     with _stats_lock:
         _stats_loaded = True
     return _stats_cache
@@ -311,12 +382,12 @@ def get_cached_stats(name):
             return cache[f'{parts[-1]}, {parts[0]}']
     return None
 
-# ─── SAVANT PAGE SCRAPE (fallback) ────────────────────────────────────────────
+# ─── SAVANT PAGE SCRAPE (last-resort fallback only) ─────────────────────────
 def scrape_player_page(player_name):
     """
-    Scrape Savant player page by name slug.
-    The page embeds Statcast stats as JSON in script tags and table rows.
-    Tries multiple extraction patterns to find 2026 data.
+    Last resort fallback. Only used when player not found in CSV cache.
+    Happens for very new call-ups or players with 0 PA in 2026.
+    Returns partial stats dict or None.
     """
     slug = normalize_name(player_name).lower().replace(' ', '-')
     html = None
@@ -331,66 +402,16 @@ def scrape_player_page(player_name):
     if not html:
         return None
 
+    # Scan page for known field names embedded in JS/JSON blobs
     stats = {}
-
-    # Pattern 1: Look for statcast table row data embedded as JS
-    # Format: {"year":2026,"avg_hit_speed":95.8,"ev95percent":54.8,...}
-    # Find all JSON objects that have avg_hit_speed
-    blobs = re.findall(r'\{[^{}]{20,500}\}', html)
-    best = {}
-    for blob in blobs:
-        if 'avg_hit_speed' not in blob and 'exit_velocity' not in blob:
-            continue
-        try:
-            d = json.loads(blob)
-        except Exception:
-            # Try partial extraction with regex
-            d = {}
-            for field, pattern in [
-                ('avg_hit_speed', r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?'),
-                ('ev95percent',   r'"ev95percent"\s*:\s*"?([\d.]+)"?'),
-                ('brl_bip_percent', r'"brl_bip_percent"\s*:\s*"?([\d.]+)"?'),
-                ('est_woba',      r'"est_woba"\s*:\s*"?([.\d]+)"?'),
-                ('woba',          r'"woba"\s*:\s*"?([.\d]+)"?'),
-                ('year',          r'"year"\s*:\s*"?(\d+)"?'),
-            ]:
-                m2 = re.search(pattern, blob)
-                if m2:
-                    d[field] = m2.group(1)
-
-        yr = str(d.get('year', '')).strip('"')
-        if yr and yr != str(CURRENT_YEAR):
-            continue
-
-        ev  = safe_float(d.get('avg_hit_speed') or d.get('exit_velocity'))
-        hh  = safe_float(d.get('ev95percent') or d.get('hard_hit_percent'))
-        brl = safe_float(d.get('brl_bip_percent') or d.get('barrel_batted_rate') or d.get('barrel_pct'))
-        xw  = safe_float(d.get('est_woba') or d.get('xwoba') or d.get('xwoba_mean'))
-        wo  = safe_float(d.get('woba'))
-
-        if xw is not None and xw > 0.050:
-            best = {'exit_velocity': ev, 'hard_hit_pct': hh,
-                    'barrel_pct': brl, 'xwoba': xw, 'woba': wo}
-            break  # Take first valid 2026 match
-
-    if best.get('xwoba'):
-        return best
-
-    # Pattern 2: Broad regex scan across entire page for key fields
-    # Savant embeds stats in multiple formats
     field_map = {
-        'exit_velocity': [r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?',
-                          r'avg_hit_speed["\s:]+([0-9.]+)'],
-        'hard_hit_pct':  [r'"ev95percent"\s*:\s*"?([\d.]+)"?',
-                          r'ev95percent["\s:]+([0-9.]+)'],
-        'barrel_pct':    [r'"brl_bip_percent"\s*:\s*"?([\d.]+)"?',
-                          r'barrel_batted_rate["\s:]+([0-9.]+)'],
-        'xwoba':         [r'"est_woba"\s*:\s*"?([.\d]+)"?',
-                          r'"xwoba"\s*:\s*"?([.\d]+)"?'],
+        'exit_velocity': [r'"avg_hit_speed"\s*:\s*"?([\d.]+)"?'],
+        'hard_hit_pct':  [r'"ev95percent"\s*:\s*"?([\d.]+)"?'],
+        'barrel_pct':    [r'"brl_percent"\s*:\s*"?([\d.]+)"?',
+                          r'"brl_bip_percent"\s*:\s*"?([\d.]+)"?'],
+        'xwoba':         [r'"est_woba"\s*:\s*"?([.\d]+)"?'],
         'woba':          [r'"woba"\s*:\s*"?([.\d]+)"?'],
-        'gb_pct':        [r'"groundballs_percent"\s*:\s*"?([\d.]+)"?',
-                          r'"gb_percent"\s*:\s*"?([\d.]+)"?'],
-        'csw_pct':       [r'"csw"\s*:\s*"?([\d.]+)"?'],
+        'ev50':          [r'"ev50"\s*:\s*"?([\d.]+)"?'],
     }
     for stat, patterns in field_map.items():
         for pat in patterns:
@@ -414,8 +435,12 @@ def fetch_one_player(info):
     result = {
         **info,
         'exit_velocity': None, 'hard_hit_pct': None,
-        'barrel_pct': None, 'xwoba': None, 'woba': None,
+        'barrel_pct': None, 'barrel_pa': None,
+        'xwoba': None, 'woba': None,
         'gb_pct': None, 'csw_pct': None,
+        'ev50': None, 'sweet_spot_pct': None,
+        'fbld_ev': None, 'gb_ev': None,
+        'avg_hr_dist': None, 'max_hit_speed': None,
         'gap': None, 'fetch_status': 'not found', 'data_source': None,
     }
     if not name:
@@ -434,29 +459,36 @@ def fetch_one_player(info):
                         return f
             return None
         # Cover ALL possible field names across every Savant endpoint
-        # Cover field names from: CSV expected_statistics, CSV statcast, JSON custom leaderboard
         result['exit_velocity'] = sane('exit_velocity', g(row,
             'exit_velocity_avg',    # CSV expected_statistics
-            'avg_hit_speed',        # JSON custom leaderboard
+            'avg_hit_speed',        # CSV statcast / JSON custom leaderboard
             'exit_velocity'))
         result['hard_hit_pct']  = sane('hard_hit_pct', g(row,
             'hard_hit_percent',     # CSV expected_statistics
-            'ev95percent',          # JSON custom leaderboard
+            'ev95percent',          # CSV statcast / JSON custom
             'hard_hit_bip_percent'))
         result['barrel_pct']    = sane('barrel_pct', g(row,
+            'brl_percent',          # CSV statcast (brl_percent = per BBE)
             'barrel_batted_rate',   # CSV expected_statistics + JSON
-            'brl_bip_percent',      # JSON statcast leaderboard
-            'barrel_pct'))
+            'brl_bip_percent'))
+        result['barrel_pa']     = sane('barrel_pct', g(row,
+            'brl_pa'))              # Barrel per PA — more stable
         result['xwoba']         = sane('xwoba', g(row,
-            'xwoba',                # CSV expected_statistics
-            'est_woba',             # JSON custom leaderboard
-            'xwoba_mean'))
-        result['woba']          = sane('woba', g(row,
-            'woba'))                # same across all formats
+            'est_woba',             # CSV expected_statistics
+            'xwoba'))               # statcast / JSON
+        result['woba']          = sane('woba', g(row, 'woba'))
         result['gb_pct']        = sane('gb_pct', g(row,
-            'groundballs_percent', 'gb_percent', 'gb_pct'))
+            'groundballs_percent', 'gb_percent', 'gb_pct', 'gb'))
         result['csw_pct']       = sane('csw_pct', g(row,
             'csw', 'csw_pct', 'called_strike_whiff_pct'))
+        # New fields from exit_velocity CSV
+        result['ev50']          = sane('exit_velocity', g(row, 'ev50'))
+        result['sweet_spot_pct']= sane('hard_hit_pct', g(row,
+            'anglesweetspotpercent', 'sweet_spot_percent', 'la_sweet_spot_percent'))
+        result['fbld_ev']       = sane('exit_velocity', g(row, 'fbld'))
+        result['gb_ev']         = sane('exit_velocity', g(row, 'gb'))
+        result['avg_hr_dist']   = g(row, 'avg_hr_distance')
+        result['max_hit_speed'] = sane('exit_velocity', g(row, 'max_hit_speed'))
         if result['xwoba'] is not None:
             result['data_source']  = 'leaderboard'
             result['fetch_status'] = 'ok'
@@ -732,12 +764,14 @@ Lineup:
 
 # ─── SCORING ─────────────────────────────────────────────────────────────────
 def compute_pitcher_gate(p):
-    ev  = p.get('exit_velocity')
-    hh  = p.get('hard_hit_pct')
-    xw  = p.get('xwoba')
-    brl = p.get('barrel_pct')
-    gb  = p.get('gb_pct')
-    csw = p.get('csw_pct')
+    ev   = p.get('exit_velocity')
+    ev50 = p.get('ev50')
+    hh   = p.get('hard_hit_pct')
+    xw   = p.get('xwoba')
+    brl  = p.get('barrel_pct')
+    gb   = p.get('gb_pct')
+    csw  = p.get('csw_pct')
+    fbld = p.get('fbld_ev')
 
     score = sum([
         1 if (ev  is not None and ev  >= 93.0) else 0,
@@ -747,24 +781,35 @@ def compute_pitcher_gate(p):
     ])
     gate = 'OPEN' if score <= 1 else 'HALF' if score == 2 else 'CLOSED'
 
-    # GB% modifier — closes gate half step if elite grounder pitcher
+    # GB% modifier
     gb_flag = ''
     if gb is not None:
         if gb >= 55:
             gb_flag = f' GB%={gb}(ELITE-SUPPRESSOR→gate+0.5)'
             if gate == 'OPEN': gate = 'OPEN→HALF'
+            elif gate == 'HALF': gate = 'HALF→CLOSED'
         elif gb >= 48:
             gb_flag = f' GB%={gb}(SOLID-GB)'
         else:
-            gb_flag = f' GB%={gb}(fly-ball-prone)'
+            gb_flag = f' GB%={gb}(fly-ball-prone→batter-boost)'
 
     # CSW% modifier
     csw_flag = ''
     if csw is not None:
-        if csw >= 30:
-            csw_flag = f' CSW%={csw}(ELITE-MISS)'
-        elif csw < 25:
-            csw_flag = f' CSW%={csw}(hittable)'
+        if csw >= 30:   csw_flag = f' CSW%={csw}(ELITE-MISS)'
+        elif csw < 25:  csw_flag = f' CSW%={csw}(hittable)'
+
+    # EV50 — for pitchers, LOWER ev50 = better (softer contact allowed)
+    ev50_flag = ''
+    if ev50 is not None:
+        if ev50 >= 103:   ev50_flag = f' EV50={ev50}(DANGER-batters-squaring-up)'
+        elif ev50 <= 96:  ev50_flag = f' EV50={ev50}(ELITE-soft-contact)'
+
+    # FB/LD EV for pitchers — lower = better
+    fbld_flag = ''
+    if fbld is not None:
+        if fbld >= 95:   fbld_flag = f' FB/LD={fbld}(HARD-fly-balls→HR-risk)'
+        elif fbld <= 88: fbld_flag = f' FB/LD={fbld}(SOFT-fly-balls→suppressor)'
 
     pts = [
         f"EV={ev or 'N/A'}{'✓' if ev and ev>=93 else '✗'}",
@@ -772,15 +817,20 @@ def compute_pitcher_gate(p):
         f"xwOBA={xw or 'N/A'}{'✓' if xw and xw>=0.350 else '✗'}",
         f"Brl%={brl or 'N/A'}{'✓' if brl and brl>=15 else '✗'}",
     ]
-    return score, gate, ' | '.join(pts) + gb_flag + csw_flag
+    return score, gate, ' | '.join(pts) + gb_flag + csw_flag + ev50_flag + fbld_flag
 
 def compute_batter_score(b):
-    brl = b.get('barrel_pct')
-    ev  = b.get('exit_velocity')
-    hh  = b.get('hard_hit_pct')
-    xw  = b.get('xwoba')
-    wo  = b.get('woba')
-    gap = b.get('gap')
+    brl    = b.get('barrel_pct')
+    brl_pa = b.get('barrel_pa')
+    ev     = b.get('exit_velocity')
+    ev50   = b.get('ev50')
+    hh     = b.get('hard_hit_pct')
+    xw     = b.get('xwoba')
+    wo     = b.get('woba')
+    gap    = b.get('gap')
+    ss     = b.get('sweet_spot_pct')
+    fbld   = b.get('fbld_ev')
+    hr_dist= b.get('avg_hr_dist')
 
     # Upgrade #2: Regression Gap — xwOBA>=.420 + gap>=+.100 → HH% threshold drops to 45%
     hh_threshold = 50.0
@@ -795,6 +845,7 @@ def compute_batter_score(b):
         1 if (ev  is not None and ev  >= 91.0)  else 0,
         1 if (hh  is not None and hh  >= hh_threshold) else 0,
     ])
+
     if gap is None:        gap_flag = 'N/A'
     elif gap >= 0.100:     gap_flag = 'COLD-BUY'
     elif gap > 0:          gap_flag = 'COLD'
@@ -807,6 +858,40 @@ def compute_batter_score(b):
         hit_tag = ' HIT-PICK-YES' if (wo and wo >= 0.320) else ''
         hr_cap = f' HR-CAP-C{hit_tag}' if gap <= -0.060 else f' HR-CAP-B{hit_tag}'
 
+    # EV50 tier flag
+    ev50_flag = ''
+    if ev50 is not None:
+        if ev50 >= 103:   ev50_flag = f' EV50={ev50}(ELITE)'
+        elif ev50 >= 100: ev50_flag = f' EV50={ev50}(PLUS)'
+        elif ev50 < 95:   ev50_flag = f' EV50={ev50}(WEAK)'
+        else:             ev50_flag = f' EV50={ev50}'
+
+    # Sweet spot flag
+    ss_flag = ''
+    if ss is not None:
+        if ss >= 38:   ss_flag = f' SS%={ss}(ELITE-LA)'
+        elif ss >= 32: ss_flag = f' SS%={ss}(GOOD-LA)'
+        else:          ss_flag = f' SS%={ss}(poor-LA)'
+
+    # FB/LD EV flag — contact quality on actual fly balls
+    fbld_flag = ''
+    if fbld is not None:
+        if fbld >= 95:   fbld_flag = f' FB/LD-EV={fbld}(ELITE)'
+        elif fbld < 88:  fbld_flag = f' FB/LD-EV={fbld}(WEAK)'
+
+    # HR distance flag
+    hrd_flag = ''
+    if hr_dist and hr_dist > 0:
+        if hr_dist >= 410:   hrd_flag = f' HR-DIST={hr_dist}(ELITE-CARRY)'
+        elif hr_dist >= 390: hrd_flag = f' HR-DIST={hr_dist}(avg)'
+        elif hr_dist > 0:    hrd_flag = f' HR-DIST={hr_dist}(short)'
+
+    # Barrel/PA — more stable power rate
+    brl_pa_flag = ''
+    if brl_pa is not None:
+        if brl_pa >= 10: brl_pa_flag = f' Brl/PA={brl_pa}(ELITE)'
+        elif brl_pa >= 6: brl_pa_flag = f' Brl/PA={brl_pa}'
+
     # Upgrade #3: Elite Barrel — 4/4 + Barrel>=25% + positive gap
     upgrade3_flag = ''
     if score == 4 and brl is not None and brl >= 25.0 and gap is not None and gap > 0:
@@ -818,11 +903,7 @@ def compute_batter_score(b):
     if gap is not None and gap >= 0.100 and lineup_pos <= 5:
         upgrade10_flag = ' [#10-REG-BOMB:C-DART+400]'
 
-    # Upgrade #11: 4/4 Override — 4/4 + 1-5 + fav platoon + gate (passed by caller)
-    # Upgrade #12: Elite Barrel+Park — Barrel>=20% + booster park + fav platoon + gate
-    # These require park/gate context — flagged in build_context instead
-
-    # Upgrade #14: Elite Profile Park — Barrel>=20% + xwOBA>=.400 + booster + 1-5
+    # Upgrade #14: Elite Profile Park — Barrel>=20% + xwOBA>=.400 + 1-5
     upgrade14_flag = ''
     if (brl is not None and brl >= 20.0 and
         xw is not None and xw >= 0.400 and
@@ -835,8 +916,9 @@ def compute_batter_score(b):
         f"EV={ev or 'N/A'}{'✓' if ev and ev>=91 else '✗'}",
         f"HH%={hh or 'N/A'}{'✓' if hh and hh>=hh_threshold else '✗'}",
     ]
+    extra = ev50_flag + ss_flag + fbld_flag + hrd_flag + brl_pa_flag
     upgrade_flags = upgrade2_flag + upgrade3_flag + upgrade10_flag + upgrade14_flag
-    return score, ' | '.join(pts) + upgrade_flags, gap_flag, hr_cap
+    return score, ' | '.join(pts) + extra + upgrade_flags, gap_flag, hr_cap
 
 def compute_platoon(bh, ph):
     bh, ph = str(bh).upper(), str(ph).upper()
@@ -1291,8 +1373,10 @@ class Handler(BaseHTTPRequestHandler):
             endpoints = [
                 ('expected_stats_batter',
                  f'https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=batter&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
+                ('statcast_batter_csv',
+                 f'https://baseballsavant.mlb.com/leaderboard/statcast?type=batter&year={CURRENT_YEAR}&position=&team=&min=1&csv=true'),
                 ('custom_batter_csv',
-                 f'https://baseballsavant.mlb.com/leaderboard/custom?year={CURRENT_YEAR}&type=batter&filter=&min=1&selections=pa,avg_hit_speed,ev95percent,barrel_batted_rate,groundballs_percent,hard_hit_percent,woba,est_woba&chart=false&csv=true'),
+                 f'https://baseballsavant.mlb.com/leaderboard/custom?year={CURRENT_YEAR}&type=batter&filter=&min=1&selections=pa,avg_hit_speed,ev95percent,barrel_batted_rate,groundballs_percent,hard_hit_percent,csw&chart=false&csv=true'),
                 ('expected_stats_pitcher',
                  f'https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=pitcher&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
             ]
@@ -1345,6 +1429,29 @@ class Handler(BaseHTTPRequestHandler):
 
             self._json(result)
 
+        elif path == '/api/status':
+            import os as _os
+            files = ['statcast_batters.csv','statcast_pitchers.csv',
+                     'expected_batters.csv','expected_pitchers.csv']
+            status = {}
+            for f in files:
+                path2 = _os.path.join(_csv_dir, f)
+                if _os.path.exists(path2):
+                    stat = _os.stat(path2)
+                    import datetime
+                    age_mins = (time.time() - stat.st_mtime) / 60
+                    status[f] = {
+                        'exists': True,
+                        'bytes': stat.st_size,
+                        'age_minutes': round(age_mins, 1),
+                        'last_updated': datetime.datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S UTC'),
+                    }
+                else:
+                    status[f] = {'exists': False}
+            status['cache_players'] = len(_stats_cache)
+            status['cache_loaded'] = _stats_loaded
+            self._json(status)
+
         elif path == '/api/rules':
             self._json({'rules': LOCKED_RULES, 'system': SYSTEM_PROMPT})
         else:
@@ -1386,5 +1493,8 @@ if __name__ == '__main__':
     print('║     SHARP ORACLE  --  HR PROP MODEL  v3        ║')
     print('╚════════════════════════════════════════════════╝')
     print(f'  PC:    http://localhost:{PORT}')
+    # Start daily CSV refresh thread
+    t = threading.Thread(target=_daily_refresh_loop, daemon=True)
+    t.start()
     server = HTTPServer(('0.0.0.0', PORT), Handler)
     server.serve_forever()
