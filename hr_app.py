@@ -1152,21 +1152,20 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         slim_statcast = []
         for p in all_statcast:
             slim_statcast.append({
-                'name':         p.get('name'),
-                'role':         p.get('role'),
-                'team':         p.get('team'),
-                'barrel_pct':   p.get('barrel_pct'),
-                'exit_velocity':p.get('exit_velocity'),
-                'ev50':         p.get('ev50'),
-                'hard_hit_pct': p.get('hard_hit_pct'),
-                'xwoba':        p.get('xwoba'),
-                'woba':         p.get('woba'),
-                'gap':          p.get('gap'),
+                'name':           p.get('name'),
+                'role':           p.get('role'),
+                'team':           p.get('team'),
+                'barrel_pct':     p.get('barrel_pct'),
+                'exit_velocity':  p.get('exit_velocity'),
+                'ev50':           p.get('ev50'),
+                'hard_hit_pct':   p.get('hard_hit_pct'),
+                'xwoba':          p.get('xwoba'),
+                'woba':           p.get('woba'),
+                'gap':            p.get('gap'),
                 'sweet_spot_pct': p.get('sweet_spot_pct'),
-                'fetch_status': p.get('fetch_status'),
+                'fetch_status':   p.get('fetch_status'),
             })
-        with store_lock:
-            jobs[jid]['statcast'] = slim_statcast
+        # Don't write to job yet — hold until analysis completes
         step_set(jid, 2, 'done', f'Stats: {ok}/{len(all_statcast)} fetched')
 
         # STEP 4: Bullpen ERA
@@ -1193,6 +1192,8 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         )
         with store_lock:
             jobs[jid]['result'] = analysis
+            jobs[jid]['statcast'] = slim_statcast
+            jobs[jid]['statcast_total'] = len(slim_statcast)
             jobs[jid]['status'] = 'done'
         step_set(jid, 4, 'done', 'Analysis complete')
 
@@ -1309,11 +1310,15 @@ fetch('/api/status').then(r=>r.json()).then(d=>{
   document.getElementById('cacheStatus').innerHTML=n>100?`<span style="color:#22c55e">${n} players</span>`:`<span style="color:#f97316">loading...</span>`;
 }).catch(()=>{document.getElementById('cacheStatus').textContent='offline'});
 
+let lastStatcast = [];
+
 function show(name,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
   if(btn)btn.classList.add('active');
+  // Always re-render stats table with latest data when switching to stats tab
+  if(name==='stats' && lastStatcast.length>0) renderStats(lastStatcast);
 }
 
 function runModel(){
@@ -1331,14 +1336,22 @@ function runModel(){
 
 function poll(){
   if(!curJid)return;
-  fetch('/api/poll?jid='+curJid).then(r=>r.json()).then(d=>{
+  fetch('/api/poll?jid='+curJid+'&t='+Date.now()).then(r=>r.json()).then(d=>{
     updateSteps(d.steps||[]);
     if(d.park_confirm&&Object.keys(d.park_confirm).length)showInfo(d.park_confirm,d.bullpen||{});
-    if(d.statcast&&d.statcast.length)showStats(d.statcast);
+    if(d.statcast&&d.statcast.length>0){
+      const expected = d.statcast_total||0;
+      // Only render when all players are fetched
+      if(expected===0||d.statcast.length>=expected){
+        showStats(d.statcast);
+      }
+    }
     if(d.status==='done'||d.status==='error'){
       clearInterval(pollTimer);
       document.getElementById('result').textContent=d.status==='done'?(d.result||''):'Error: '+(d.error||'');
       document.getElementById('runBtn').disabled=false;
+      // Show statcast first so user can review, then switch to picks
+      if(d.statcast&&d.statcast.length>0) showStats(d.statcast);
       show('picks',document.querySelectorAll('.nav-btn')[2]);
       fetch('/api/status').then(r=>r.json()).then(s=>{
         document.getElementById('cacheStatus').innerHTML=`<span style="color:#22c55e">${s.cache_players||0} players</span>`;
@@ -1372,6 +1385,11 @@ function showInfo(p,pen){
 }
 
 function showStats(stats){
+  if(stats&&stats.length>0) lastStatcast=stats;
+  renderStats(stats);
+}
+
+function renderStats(stats){
   try {
     const fv=(v,thr)=>{
       if(v==null||v===undefined||v==='')return`<span class="na">—</span>`;
@@ -1413,7 +1431,7 @@ function showStats(stats){
   if(document.getElementById('panel-analyze').classList.contains('active'))
     show('stats',document.querySelectorAll('.nav-btn')[1]);
   if(window.innerWidth < 600) document.getElementById('scrollHint').style.display='block';
-}
+}}
 </script>
 </body>
 </html>"""
@@ -1542,6 +1560,28 @@ class Handler(BaseHTTPRequestHandler):
             status['cache_players'] = len(_stats_cache)
             status['cache_loaded'] = _stats_loaded
             self._json(status)
+
+        elif path == '/api/namecheck':
+            # Test name lookup for a comma-separated list of players
+            qs = parse_qs(urlparse(self.path).query)
+            names = qs.get('names', [''])[0].split(',')
+            result = {}
+            cache = load_stats_cache()
+            for raw_name in names:
+                name = raw_name.strip()
+                key = normalize_name(name).lower()
+                parts = key.split()
+                found = key in cache
+                short = f'{parts[0]} {parts[-1]}' if len(parts)>=2 else key
+                found_short = short in cache
+                result[name] = {
+                    'found': found or found_short,
+                    'key_tried': key,
+                    'short_key': short,
+                    'xwoba': cache.get(key, cache.get(short, {})).get('est_woba') or
+                             cache.get(key, cache.get(short, {})).get('xwoba'),
+                }
+            self._json({'cache_size': len(cache), 'results': result})
 
         elif path == '/api/rules':
             self._json({'rules': LOCKED_RULES, 'system': SYSTEM_PROMPT})
