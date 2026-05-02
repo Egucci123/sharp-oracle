@@ -1151,40 +1151,47 @@ class Handler(BaseHTTPRequestHandler):
             name = qs.get('name', ['Elly De La Cruz'])[0]
             result = {}
 
-            # Test 1: bulk leaderboard
+            # Test leaderboard — show actual field names from first row
             url_lb = (f'https://baseballsavant.mlb.com/leaderboard/custom'
                       f'?year=2026&type=batter&filter=&min=1'
-                      f'&selections=pa,woba,xwoba,barrel_batted_rate,avg_hit_speed,ev95percent'
+                      f'&selections=pa,woba,xwoba,barrel_batted_rate,avg_hit_speed,ev95percent,'
+                      f'groundballs_percent,csw'
                       f'&chart=false&_{int(time.time())}')
             raw_lb = savant_get(url_lb, accept_json=True, timeout=20)
-            result['leaderboard_bytes'] = len(raw_lb) if raw_lb else 0
-            result['leaderboard_status'] = 'OK' if raw_lb and len(raw_lb) > 100 else 'BLOCKED'
+            if raw_lb:
+                try:
+                    data = json.loads(raw_lb)
+                    rows = data if isinstance(data, list) else data.get('data', [])
+                    result['leaderboard_rows'] = len(rows)
+                    result['leaderboard_type'] = type(data).__name__
+                    if rows:
+                        result['first_row_keys'] = list(rows[0].keys())
+                        result['first_row_sample'] = rows[0]
+                    # Find Elly by name
+                    key = normalize_name(name).lower()
+                    for row in rows:
+                        n = (row.get('name_display_first_last') or row.get('player_name') or row.get('name') or '').strip()
+                        if normalize_name(n).lower() == key:
+                            result['player_found'] = row
+                            break
+                except Exception as e:
+                    result['leaderboard_parse_error'] = str(e)
 
-            # Test 2: page scrape
+            # Test page scrape — show snippet around where summary line should be
             slug = normalize_name(name).lower().replace(' ', '-')
             url_pg = f'https://baseballsavant.mlb.com/savant-player/{slug}?season=2026'
             raw_pg = savant_get(url_pg, timeout=15)
-            result['page_bytes'] = len(raw_pg) if raw_pg else 0
-            result['page_status'] = 'OK' if raw_pg and len(raw_pg) > 5000 else 'BLOCKED/EMPTY'
-
-            # Test 3: actual parse
-            if raw_pg and len(raw_pg) > 5000:
-                import re as _re
-                m2 = _re.search(
-                    r'\(2026\)\s*Avg\s*Exit\s*Vel[a-z]*:\s*([\d.]+)[,\s]*'
-                    r'Hard\s*Hit\s*%:\s*([\d.]+)[,\s]*'
-                    r'wOBA:\s*([.\d]+)[,\s]*'
-                    r'xwOBA:\s*([.\d]+)[,\s]*'
-                    r'Barrel\s*%:\s*([\d.]+)',
-                    raw_pg, _re.I
-                )
-                result['summary_line_found'] = bool(m2)
-                if m2:
-                    result['parsed'] = {'ev': m2.group(1), 'hh': m2.group(2),
-                                        'woba': m2.group(3), 'xwoba': m2.group(4), 'brl': m2.group(5)}
+            if raw_pg:
+                # Search for 2026 near exit velocity
+                idx = raw_pg.lower().find('exit vel')
+                if idx >= 0:
+                    result['page_exit_vel_snippet'] = raw_pg[max(0,idx-50):idx+200]
+                idx2 = raw_pg.find('(2026)')
+                result['page_2026_found'] = idx2 >= 0
+                if idx2 >= 0:
+                    result['page_2026_snippet'] = raw_pg[idx2:idx2+300]
 
             result['name_tested'] = name
-            result['slug'] = slug
             self._json(result)
 
         elif path == '/api/rules':
