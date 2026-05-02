@@ -1139,7 +1139,7 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         analysis = call_claude(
             [{'role': 'user', 'content': ctx}],
             system=SYSTEM_PROMPT,
-            max_tokens=1500
+            max_tokens=4000
         )
         with store_lock:
             jobs[jid]['result'] = analysis
