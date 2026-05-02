@@ -266,27 +266,23 @@ def load_stats_cache():
                 count += 1
         return count
 
-    # Try multiple Savant leaderboard endpoints for each player type
-    total = 0
+    # PASS 1: expected_statistics CSV — gets xwOBA, wOBA, xBA, xSLG for all players
     for player_type in ['batter', 'pitcher']:
-        endpoints = [
-            (f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
-             f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
-            (f'https://baseballsavant.mlb.com/leaderboard/statcast'
-             f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1'),
-            (f'https://baseballsavant.mlb.com/leaderboard/custom'
-             f'?year={CURRENT_YEAR}&type={player_type}&filter=&min=1'
-             f'&selections=pa,woba,xwoba,barrel_batted_rate,avg_hit_speed,'
-             f'ev95percent,groundballs_percent,csw&chart=false'),
-        ]
-        for url in endpoints:
-            n = pull_endpoint(url, player_type)
-            if n > 10:
-                total += n
-                print(f"[STATS CACHE] {player_type}={n} from {url[:60]}")
-                break
-            else:
-                print(f"[STATS CACHE] {player_type} got {n} rows from {url[:60]}")
+        url = (f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
+               f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1&csv=false')
+        n = pull_endpoint(url, player_type)
+        print(f"[STATS CACHE] pass1 {player_type}={n}")
+
+    # PASS 2: custom leaderboard CSV — gets EV, HH%, Barrel%, GB%, CSW%
+    # Use csv=true to force CSV response instead of HTML
+    for player_type in ['batter', 'pitcher']:
+        url = (f'https://baseballsavant.mlb.com/leaderboard/custom'
+               f'?year={CURRENT_YEAR}&type={player_type}&filter=&min=1'
+               f'&selections=pa,avg_hit_speed,ev95percent,barrel_batted_rate,'
+               f'groundballs_percent,hard_hit_percent,woba,est_woba'
+               f'&chart=false&csv=true')
+        n = pull_endpoint(url, player_type)
+        print(f"[STATS CACHE] pass2 {player_type}={n}")
 
     print(f"[STATS CACHE] Total={len(_stats_cache)}")
     with _stats_lock:
@@ -1295,8 +1291,8 @@ class Handler(BaseHTTPRequestHandler):
             endpoints = [
                 ('expected_stats_batter',
                  f'https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=batter&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
-                ('statcast_batter',
-                 f'https://baseballsavant.mlb.com/leaderboard/statcast?type=batter&year={CURRENT_YEAR}&position=&team=&min=1'),
+                ('custom_batter_csv',
+                 f'https://baseballsavant.mlb.com/leaderboard/custom?year={CURRENT_YEAR}&type=batter&filter=&min=1&selections=pa,avg_hit_speed,ev95percent,barrel_batted_rate,groundballs_percent,hard_hit_percent,woba,est_woba&chart=false&csv=true'),
                 ('expected_stats_pitcher',
                  f'https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=pitcher&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
             ]
