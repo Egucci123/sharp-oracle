@@ -196,7 +196,7 @@ def load_stats_cache():
             return _stats_cache
         _stats_cache = {}
 
-    def try_parse_json(raw, player_type):
+    def try_parse(raw, player_type):
         """Try to parse JSON from raw response, handling HTML wrappers."""
         if not raw:
             return []
@@ -224,14 +224,42 @@ def load_stats_cache():
 
     def pull_endpoint(url, player_type):
         raw = savant_get(url, accept_json=True, timeout=25)
-        rows = try_parse_json(raw, player_type)
+        if not raw:
+            return 0
+        raw = raw.strip().lstrip('\ufeff')  # strip BOM
+
+        # Parse CSV (expected_statistics endpoint returns CSV)
+        rows = []
+        if raw.startswith('"') or (not raw.startswith('{') and not raw.startswith('[')):
+            try:
+                import csv, io
+                reader = csv.DictReader(io.StringIO(raw))
+                rows = [dict(r) for r in reader]
+            except Exception as e:
+                print(f"[CSV parse error] {e}")
+        else:
+            # JSON fallback
+            try:
+                data = json.loads(raw)
+                rows = data if isinstance(data, list) else data.get('data', [])
+            except Exception:
+                pass
+
         count = 0
         for row in rows:
-            # Try all possible name fields
-            name = (row.get('name_display_first_last') or
-                    row.get('player_name') or row.get('name') or
-                    f"{row.get('first_name','')} {row.get('last_name','')}".strip() or
-                    f"{row.get('last_name','')}, {row.get('first_name','')}".strip()).strip(' ,')
+            # CSV: "last_name, first_name" field OR JSON name fields
+            name = ''
+            # CSV expected_statistics format: "last_name, first_name"
+            lf = row.get('last_name, first_name', '')
+            if lf:
+                # "De La Cruz, Elly" -> "Elly De La Cruz"
+                parts = lf.split(',', 1)
+                if len(parts) == 2:
+                    name = f"{parts[1].strip()} {parts[0].strip()}"
+            if not name:
+                name = (row.get('name_display_first_last') or
+                        row.get('player_name') or row.get('name') or
+                        f"{row.get('first_name','')} {row.get('last_name','')}".strip()).strip(' ,')
             if name and len(name) > 2:
                 key = normalize_name(name).lower()
                 _stats_cache[key] = row
@@ -410,16 +438,25 @@ def fetch_one_player(info):
                         return f
             return None
         # Cover ALL possible field names across every Savant endpoint
+        # Cover field names from: CSV expected_statistics, CSV statcast, JSON custom leaderboard
         result['exit_velocity'] = sane('exit_velocity', g(row,
-            'avg_hit_speed', 'exit_velocity', 'avg_exit_velocity'))
+            'exit_velocity_avg',    # CSV expected_statistics
+            'avg_hit_speed',        # JSON custom leaderboard
+            'exit_velocity'))
         result['hard_hit_pct']  = sane('hard_hit_pct', g(row,
-            'ev95percent', 'hard_hit_percent', 'hard_hit_bip_percent', 'hh_percent'))
+            'hard_hit_percent',     # CSV expected_statistics
+            'ev95percent',          # JSON custom leaderboard
+            'hard_hit_bip_percent'))
         result['barrel_pct']    = sane('barrel_pct', g(row,
-            'brl_bip_percent', 'barrel_batted_rate', 'barrel_pct', 'brl_percent'))
+            'barrel_batted_rate',   # CSV expected_statistics + JSON
+            'brl_bip_percent',      # JSON statcast leaderboard
+            'barrel_pct'))
         result['xwoba']         = sane('xwoba', g(row,
-            'est_woba', 'xwoba', 'xwoba_mean', 'expected_woba'))
+            'xwoba',                # CSV expected_statistics
+            'est_woba',             # JSON custom leaderboard
+            'xwoba_mean'))
         result['woba']          = sane('woba', g(row,
-            'woba', 'woba_mean'))
+            'woba'))                # same across all formats
         result['gb_pct']        = sane('gb_pct', g(row,
             'groundballs_percent', 'gb_percent', 'gb_pct'))
         result['csw_pct']       = sane('csw_pct', g(row,
@@ -1268,28 +1305,43 @@ class Handler(BaseHTTPRequestHandler):
                 if not raw:
                     result[ep_name] = 'NO_RESPONSE'
                     continue
-                raw = raw.strip()
-                result[f'{ep_name}_bytes'] = len(raw)
-                result[f'{ep_name}_starts_with'] = raw[:50]
-                if raw.startswith('[') or raw.startswith('{'):
+                raw2 = raw.strip().lstrip('\ufeff')
+                result[f'{ep_name}_bytes'] = len(raw2)
+                result[f'{ep_name}_starts_with'] = raw2[:80]
+
+                # Try CSV
+                import csv, io
+                rows = []
+                try:
+                    reader = csv.DictReader(io.StringIO(raw2))
+                    rows = [dict(r) for r in reader]
+                except Exception:
+                    pass
+
+                if not rows:
+                    # Try JSON
                     try:
-                        data = json.loads(raw)
+                        data = json.loads(raw2)
                         rows = data if isinstance(data, list) else data.get('data', [])
-                        result[f'{ep_name}_rows'] = len(rows)
-                        if rows:
-                            result[f'{ep_name}_keys'] = list(rows[0].keys())[:20]
-                            # Find target player
-                            key = normalize_name(name).lower()
-                            for row in rows:
-                                n = (row.get('name_display_first_last') or
-                                     row.get('player_name') or row.get('name') or '').strip()
-                                if normalize_name(n).lower() == key:
-                                    result[f'{ep_name}_player'] = row
-                                    break
                     except Exception as e:
                         result[f'{ep_name}_parse_err'] = str(e)
-                else:
-                    result[f'{ep_name}_is_html'] = True
+
+                result[f'{ep_name}_rows'] = len(rows)
+                if rows:
+                    result[f'{ep_name}_keys'] = list(rows[0].keys())[:25]
+                    # Find target player
+                    tgt = normalize_name(name).lower()
+                    for row in rows:
+                        lf = row.get('last_name, first_name', '')
+                        if lf:
+                            parts = lf.split(',', 1)
+                            n = f"{parts[1].strip()} {parts[0].strip()}" if len(parts)==2 else lf
+                        else:
+                            n = (row.get('name_display_first_last') or
+                                 row.get('player_name') or row.get('name') or '').strip()
+                        if normalize_name(n).lower() == tgt:
+                            result[f'{ep_name}_player'] = row
+                            break
 
             # Test page scrape
             scraped = scrape_player_page(name)
