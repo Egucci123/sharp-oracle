@@ -731,6 +731,50 @@ def fetch_bullpen_era(team_name):
     if not team_id:
         return {'era': None, 'tier': 'UNKNOWN'}
 
+    # Try covers.com bullpen stats page
+    COVERS_ABBREVS = {
+        'angels': 'LAA', 'astros': 'HOU', 'athletics': 'OAK', 'blue jays': 'TOR',
+        'braves': 'ATL', 'brewers': 'MIL', 'cardinals': 'STL', 'cubs': 'CHC',
+        'diamondbacks': 'ARI', 'dodgers': 'LAD', 'giants': 'SF', 'guardians': 'CLE',
+        'mariners': 'SEA', 'marlins': 'MIA', 'mets': 'NYM', 'nationals': 'WSH',
+        'orioles': 'BAL', 'padres': 'SD', 'phillies': 'PHI', 'pirates': 'PIT',
+        'rangers': 'TEX', 'rays': 'TB', 'red sox': 'BOS', 'reds': 'CIN',
+        'rockies': 'COL', 'royals': 'KC', 'tigers': 'DET', 'twins': 'MIN',
+        'white sox': 'CWS', 'yankees': 'NYY',
+    }
+    abbrev = None
+    for k, v in COVERS_ABBREVS.items():
+        if k in key or key in k:
+            abbrev = v
+            break
+
+    # Try covers.com
+    if abbrev:
+        try:
+            url = f'https://www.covers.com/sport/baseball/mlb/statistics/team-bullpenera/{CURRENT_YEAR}'
+            req = urllib.request.Request(url, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                html = r.read().decode('utf-8', errors='replace')
+            # Find the team row
+            pattern = rf'{abbrev}[^<]*</[^>]+>[^<]*<[^>]+>([0-9]+\.[0-9]+)'
+            m = re.search(pattern, html)
+            if not m:
+                # Try broader search near abbrev
+                idx = html.find(f'>{abbrev}<')
+                if idx == -1:
+                    idx = html.find(f'">{abbrev}')
+                if idx > 0:
+                    snippet = html[idx:idx+200]
+                    nm = re.search(r'([0-9]+\.[0-9]+)', snippet)
+                    if nm:
+                        era = safe_float(nm.group(1))
+                        if era and 0 < era < 10:
+                            tier = 'WEAK' if era >= 5.50 else 'AVERAGE' if era >= 4.50 else 'SOLID'
+                            return {'era': round(era, 2), 'tier': tier}
+        except Exception:
+            pass
+
+    # Fallback: MLB Stats API
     for url in [
         f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats?stats=season&group=pitching&season={CURRENT_YEAR}&gameType=R',
         f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats?stats=season&group=pitching&season={CURRENT_YEAR}',
@@ -1346,11 +1390,11 @@ function poll(){
   fetch('/api/poll?jid='+curJid+'&t='+Date.now()).then(r=>r.json()).then(d=>{
     updateSteps(d.steps||[]);
     if(d.park_confirm&&Object.keys(d.park_confirm).length)showInfo(d.park_confirm,d.bullpen||{});
+    if(d.statcast&&d.statcast.length>0) showStats(d.statcast);
     if(d.status==='done'||d.status==='error'){
       clearInterval(pollTimer);
       document.getElementById('result').textContent=d.status==='done'?(d.result||''):'Error: '+(d.error||'');
       document.getElementById('runBtn').disabled=false;
-      if(d.statcast&&d.statcast.length>0) showStats(d.statcast);
       show('picks',document.querySelectorAll('.nav-btn')[2]);
       fetch('/api/status').then(r=>r.json()).then(s=>{
         document.getElementById('cacheStatus').innerHTML=`<span style="color:#22c55e">${s.cache_players||0} players</span>`;
