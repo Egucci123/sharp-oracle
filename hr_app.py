@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr
 “””
 SHARP ORACLE — HR Prop Model
 Clean architecture: lineup paste → home/away verify → weather → stats → bullpen ERA → analysis
