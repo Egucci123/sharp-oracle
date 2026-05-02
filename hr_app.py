@@ -71,31 +71,37 @@ WEATHER: >=85F=boost | <=50F=suppress | <=45F=hard suppress
 """
 
 SYSTEM_PROMPT = (
-    "You are Marcus Cole — the sharpest MLB prop analyst in the game. 20 years breaking down Statcast before it was cool. "
-    "You see things nobody else sees. You connect dots — a pitcher's GB rate against pull-heavy lefties at 48 degrees, "
-    "a batter's xwOBA spike after a lineup change, a bullpen ERA that means the 6th inning is a free square. "
-    "You don't chase chalk. You find the edges everyone else walks past.\n\n"
-    "You think in layers: raw power metrics → platoon edge → gap signals → park physics → bullpen exposure → "
-    "weather suppression → regression windows. Every pick has a reason that goes three levels deep.\n\n"
-    "DATA: All stats are live-fetched 2026 season Statcast. Use ONLY the numbers provided — never substitute gut feel "
-    "for actual data. GAP = xwOBA minus wOBA. Positive = COLD (regression coming, buy it). "
-    "Negative = HOT (overperforming, fade HR, but hits are fine). [PROXY] = no 2026 data, handle conservatively.\n\n"
-    "PROCESS: Before writing a single pick, run through the full model in your head:\n"
-    "- Score every batter (Barrel%>=15, xwOBA>=.350, EV>=91, HH%>=50 = 1pt each)\n"
-    "- Set pitcher gates (same thresholds, EV>=93 for pitchers)\n"
-    "- Apply platoon edges, gap signals, park boost/suppress, weather\n"
-    "- Check all 14 upgrades — bullpen tier, regression bombs, stack games, debut plays\n"
-    "- Find the non-obvious angles: the guy batting 7th with a COLD-BUY gap nobody is pricing, "
-    "the HOT-gap batter who's a monster hit play despite the HR fade, "
-    "the weak bullpen that turns the 6th inning into a power slot\n\n"
-    "OUTPUT FORMAT — exactly this, nothing else:\n\n"
+    "You are Marcus Cole — the sharpest MLB prop analyst alive. 20 years reading Statcast before it was cool. "
+    "You connect dots nobody else sees. You find the 7th-spot batter with a COLD-BUY gap the market ignores. "
+    "You go three levels deep on every pick. Be specific — never generic stat recitation.\n\n"
+    "PROCESS (do this in your head before writing a single word):\n"
+    "- Score every batter: Barrel%>=15, xwOBA>=.350, EV>=91, HH%>=50 = 1pt each\n"
+    "- Set pitcher gates, apply GB%/CSW% modifiers\n"
+    "- Apply platoon edges, gap signals, park, weather, bullpen ERA\n"
+    "- Run all 14 upgrades\n"
+    "- Use EV50, SS%, FB/LD EV, HR distance as tiebreakers and sharp angles\n\n"
+    "DATA RULES: Use ONLY pre-computed scores and flags in the context. "
+    "GAP positive = COLD (buy regression). GAP negative = HOT (fade HR, hits still fine). "
+    "[PROXY] = no 2026 data, max B grade.\n\n"
+    "OUTPUT: Write your full sharp analysis — batter grades, upgrades, park/weather layer, "
+    "angles the market is missing. Then ALWAYS end with BOTH sections below, no exceptions.\n\n"
+    "Even if the slate is cold and HR edges are weak, you MUST give 5 HR picks. "
+    "Gun-to-head: rank them best to worst and pick. Note confidence level if slate is weak.\n\n"
+    "══════════════════════════════════════\n"
     "TOP 5 HR BETS:\n"
-    "1. [Name] ([Team]) | [odds estimate] | [2-3 sharp sentences — the real reason, not generic stats recitation]\n"
-    "2-5. same format\n\n"
+    "1. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
+    "2. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
+    "3. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
+    "4. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
+    "5. [Name] ([Team]) | [odds] | [2 sharp sentences]\n\n"
     "TOP 5 HIT BETS:\n"
-    "1. [Name] ([Team]) | [odds estimate] | [2-3 sharp sentences]\n"
-    "2-5. same format\n\n"
-    "Be specific. Be sharp. Connect the dots. Find what the market is missing.\n\n"
+    "1. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
+    "2. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
+    "3. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
+    "4. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
+    "5. [Name] ([Team]) | [odds] | [2 sharp sentences]\n"
+    "══════════════════════════════════════\n\n"
+    "These two sections MUST always appear at the end. Always 5 HR picks and 5 hit picks. Always.\n\n"
     + LOCKED_RULES
 )
 
@@ -1156,289 +1162,244 @@ HTML = r"""<!DOCTYPE html>
 <title>Sharp Oracle</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#080d18;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
-/* ── HEADER ── */
-.header{background:linear-gradient(135deg,#0a0e1a 0%,#111827 100%);border-bottom:1px solid #1e3a5f;
-  padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
-.logo{font-size:1.4em;font-weight:900;letter-spacing:3px;color:#f7c948;text-shadow:0 0 20px rgba(247,201,72,.3)}
-.logo span{color:#fff;font-weight:300}
-.status-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:6px;
-  box-shadow:0 0 8px #22c55e}
-.header-right{font-size:12px;color:#64748b;display:flex;align-items:center;gap:16px}
-/* ── TABS ── */
-.tabs{background:#0d1424;border-bottom:1px solid #1e3a5f;display:flex;padding:0 24px;gap:0}
-.tab{padding:12px 20px;font-size:13px;font-weight:600;color:#64748b;cursor:pointer;
-  border-bottom:2px solid transparent;transition:all .2s;letter-spacing:.5px}
-.tab:hover{color:#94a3b8}
-.tab.active{color:#f7c948;border-bottom-color:#f7c948}
-.tab-content{display:none;padding:20px 24px}
-.tab-content.active{display:block}
-/* ── CARDS ── */
-.card{background:#111827;border:1px solid #1e3a5f;border-radius:10px;padding:18px;margin-bottom:14px}
-.card-title{font-size:11px;font-weight:700;letter-spacing:1.5px;color:#64748b;text-transform:uppercase;margin-bottom:12px}
-/* ── INPUT ── */
-textarea{width:100%;background:#0a0e1a;color:#e2e8f0;border:1px solid #1e3a5f;border-radius:8px;
-  padding:14px;font-size:13px;resize:vertical;min-height:220px;font-family:'Courier New',monospace;
-  line-height:1.5;transition:border-color .2s}
+body{background:#0a0e1a;color:#e2e8f0;font-family:'Segoe UI',sans-serif;min-height:100vh;display:flex;flex-direction:column}
+/* HEADER */
+.header{background:#060a14;border-bottom:2px solid #f7c948;padding:12px 20px;display:flex;align-items:center;gap:16px;flex-shrink:0}
+.logo{font-size:1.3em;font-weight:900;letter-spacing:3px;color:#f7c948}
+.logo span{color:#e2e8f0;font-weight:300}
+.header-status{font-size:11px;color:#64748b;margin-left:auto;display:flex;align-items:center;gap:8px}
+.status-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;display:inline-block;box-shadow:0 0 6px #22c55e}
+/* LAYOUT */
+.layout{display:flex;flex:1;overflow:hidden;height:calc(100vh - 49px)}
+/* SIDEBAR */
+.sidebar{width:160px;background:#060a14;border-right:1px solid #1e3a5f;display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto}
+.nav-section{padding:10px 0}
+.nav-label{font-size:9px;font-weight:700;letter-spacing:1.5px;color:#334155;padding:6px 14px 4px;text-transform:uppercase}
+.nav-btn{display:block;width:100%;text-align:left;padding:8px 14px;font-size:12px;font-weight:600;color:#64748b;background:none;border:none;cursor:pointer;border-left:2px solid transparent;transition:all .15s;letter-spacing:.3px}
+.nav-btn:hover{color:#94a3b8;background:#0d1424}
+.nav-btn.active{color:#f7c948;border-left-color:#f7c948;background:#0d1424}
+/* MAIN */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.panel{display:none;flex:1;overflow-y:auto;padding:16px}
+.panel.active{display:flex;flex-direction:column}
+/* CARDS */
+.card{background:#111827;border:1px solid #1e3a5f;border-radius:8px;padding:16px;margin-bottom:12px}
+.card-title{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#64748b;text-transform:uppercase;margin-bottom:10px}
+/* INPUT */
+textarea{width:100%;background:#080d18;color:#e2e8f0;border:1px solid #1e3a5f;border-radius:6px;padding:12px;font-size:13px;resize:vertical;min-height:180px;font-family:'Courier New',monospace;line-height:1.5}
 textarea:focus{outline:none;border-color:#f7c948}
-textarea::placeholder{color:#334155}
-/* ── BUTTON ── */
-.btn{background:linear-gradient(135deg,#f7c948,#e6a800);color:#0a0e1a;border:none;border-radius:8px;
-  padding:13px 24px;font-size:14px;font-weight:800;cursor:pointer;width:100%;margin-top:10px;
-  letter-spacing:.5px;transition:all .2s;text-transform:uppercase}
-.btn:hover{transform:translateY(-1px);box-shadow:0 4px 20px rgba(247,201,72,.4)}
-.btn:disabled{background:#1e293b;color:#475569;cursor:not-allowed;transform:none;box-shadow:none}
-/* ── STEPS ── */
-.steps{display:flex;flex-direction:column;gap:6px}
-.step{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:8px;
-  background:#0a0e1a;border:1px solid #1e293b;font-size:13px;color:#475569;transition:all .3s}
-.step.active{border-color:#f7c948;color:#f7c948;background:#1a1400}
-.step.done{border-color:#22c55e;color:#22c55e;background:#001a0a}
-.step.error{border-color:#ef4444;color:#ef4444;background:#1a0000}
-.step-icon{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-  font-size:10px;font-weight:700;flex-shrink:0;border:1px solid currentColor}
-/* ── INFO BAR ── */
-.info-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
-.pill{background:#0d1424;border:1px solid #1e3a5f;border-radius:20px;padding:5px 14px;
-  font-size:12px;color:#64748b;display:flex;align-items:center;gap:6px}
-.pill b{color:#f7c948;font-weight:700}
+textarea::placeholder{color:#1e3a5f}
+.run-btn{background:#f7c948;color:#080d18;border:none;border-radius:6px;padding:11px;font-size:13px;font-weight:800;cursor:pointer;width:100%;margin-top:8px;letter-spacing:.5px;text-transform:uppercase}
+.run-btn:hover{background:#e6b800}
+.run-btn:disabled{background:#1e293b;color:#475569;cursor:not-allowed}
+/* STEPS */
+.steps{display:flex;flex-direction:column;gap:5px}
+.step{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;background:#080d18;border:1px solid #1e293b;font-size:12px;color:#475569}
+.step.active{border-color:#f7c948;color:#f7c948;background:#100e00}
+.step.done{border-color:#22c55e;color:#22c55e;background:#001008}
+.step.error{border-color:#ef4444;color:#ef4444}
+/* INFO PILLS */
+.pill-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.pill{background:#0d1424;border:1px solid #1e3a5f;border-radius:16px;padding:4px 12px;font-size:11px;color:#64748b}
+.pill b{color:#f7c948}
+.pill.bad b{color:#ef4444}
 .pill.warn b{color:#f97316}
 .pill.good b{color:#22c55e}
-.pill.bad b{color:#ef4444}
-/* ── STAT TABLE ── */
-.stat-wrap{overflow-x:auto}
-.stat-table{width:100%;border-collapse:collapse;font-size:12px;min-width:600px}
-.stat-table th{background:#0d1424;padding:8px 10px;text-align:left;color:#64748b;
-  font-weight:600;font-size:11px;letter-spacing:.8px;text-transform:uppercase;
-  border-bottom:1px solid #1e3a5f;white-space:nowrap}
-.stat-table td{padding:7px 10px;border-bottom:1px solid #0d1424;font-size:12px;white-space:nowrap}
-.stat-table tr:hover td{background:#0f1929}
-.stat-table .pitcher{background:#0a0f1a}
+/* STAT TABLE */
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px;min-width:540px}
+th{background:#080d18;padding:7px 8px;text-align:left;color:#475569;font-weight:600;font-size:10px;letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid #1e3a5f;white-space:nowrap}
+td{padding:6px 8px;border-bottom:1px solid #0d1424;white-space:nowrap}
+tr:hover td{background:#0a0f1a}
+tr.pitcher-row td{background:#06090f}
 .hit{color:#22c55e;font-weight:700}
-.miss{color:#475569}
-.na{color:#334155}
-.warn-cell{color:#f97316}
-/* ── RESULT ── */
-.result-wrap{background:#0a0e1a;border:1px solid #1e3a5f;border-radius:10px;padding:20px;margin-top:4px}
-.result-text{white-space:pre-wrap;font-family:'Courier New',monospace;font-size:13px;
-  line-height:1.8;color:#e2e8f0}
-.result-text strong, .result-section{color:#f7c948;font-weight:700}
-/* ── HR/HIT PICKS STYLING ── */
-.picks{display:flex;flex-direction:column;gap:12px;margin-top:8px}
-.pick-card{background:#0d1424;border:1px solid #1e3a5f;border-radius:8px;padding:14px}
-.pick-card.hr{border-left:3px solid #ef4444}
-.pick-card.hit{border-left:3px solid #22c55e}
-.pick-header{display:flex;align-items:center;gap:10px;margin-bottom:6px}
-.pick-rank{font-size:11px;font-weight:700;color:#64748b}
-.pick-name{font-size:14px;font-weight:700;color:#f7c948}
-.pick-odds{font-size:12px;color:#94a3b8;margin-left:auto}
-.pick-reason{font-size:12px;color:#94a3b8;line-height:1.5}
+.miss{color:#334155}
+.na{color:#1e3a5f}
+.hot{color:#ef4444}
+/* RESULT */
+.result-box{background:#080d18;border:1px solid #1e3a5f;border-radius:6px;padding:16px;white-space:pre-wrap;font-family:'Courier New',monospace;font-size:13px;line-height:1.7;flex:1}
 </style>
 </head>
 <body>
 
 <div class="header">
   <div class="logo">⚡ SHARP<span> ORACLE</span></div>
-  <div class="header-right">
-    <span><span class="status-dot"></span>LIVE</span>
-    <span id="cacheStatus">Loading...</span>
+  <div class="header-status">
+    <span class="status-dot"></span>
+    <span id="cacheStatus">checking...</span>
   </div>
 </div>
 
-<div class="tabs">
-  <div class="tab active" onclick="switchTab('analyze')">ANALYZE</div>
-  <div class="tab" onclick="switchTab('stats')">STATCAST</div>
-  <div class="tab" onclick="switchTab('result')">PICKS</div>
-</div>
-
-<div id="tab-analyze" class="tab-content active">
-  <div class="card">
-    <div class="card-title">Lineup Input</div>
-    <textarea id="lineup" placeholder="Paste lineup here...
-
-Format: AwayTeam @ HomeTeam
-Pitcher Name (Hand) ERA
-Batter Name (Hand) Position
-..."></textarea>
-    <button class="btn" id="runBtn" onclick="runModel()">▶ RUN MODEL</button>
-  </div>
-
-  <div class="card" id="stepsCard" style="display:none">
-    <div class="card-title">Progress</div>
-    <div class="steps" id="steps"></div>
-  </div>
-
-  <div class="card" id="infoCard" style="display:none">
-    <div class="card-title">Game Info</div>
-    <div class="info-bar" id="infoBar"></div>
-  </div>
-</div>
-
-<div id="tab-stats" class="tab-content">
-  <div class="card">
-    <div class="card-title">Statcast Pull</div>
-    <div class="stat-wrap">
-      <table class="stat-table">
-        <thead><tr>
-          <th>Player</th><th>Role</th><th>Team</th>
-          <th>BRL%</th><th>EV</th><th>EV50</th><th>HH%</th>
-          <th>xwOBA</th><th>wOBA</th><th>GAP</th><th>SS%</th><th>Status</th>
-        </tr></thead>
-        <tbody id="statBody"><tr><td colspan="12" class="na" style="padding:20px;text-align:center">Run a lineup to see stats</td></tr></tbody>
-      </table>
+<div class="layout">
+  <div class="sidebar">
+    <div class="nav-section">
+      <div class="nav-label">Model</div>
+      <button class="nav-btn active" onclick="show('analyze')">ANALYZE</button>
+      <button class="nav-btn" onclick="show('stats')">STATCAST</button>
+    </div>
+    <div class="nav-section">
+      <div class="nav-label">Results</div>
+      <button class="nav-btn" onclick="show('picks')">PICKS</button>
     </div>
   </div>
-</div>
 
-<div id="tab-result" class="tab-content">
-  <div class="card" id="resultCard">
-    <div class="card-title">Sharp Oracle Picks</div>
-    <div class="result-wrap">
-      <div class="result-text" id="result">Run a lineup to see picks...</div>
+  <div class="main">
+    <!-- ANALYZE -->
+    <div id="panel-analyze" class="panel active">
+      <div class="card">
+        <div class="card-title">Lineup Input</div>
+        <textarea id="lineup" placeholder="Paste lineup here...
+
+AwayTeam @ HomeTeam
+Pitcher Name (Hand)
+1. Batter Name (Hand) POS
+..."></textarea>
+        <button class="run-btn" id="runBtn" onclick="runModel()">▶ RUN MODEL</button>
+      </div>
+
+      <div class="card" id="stepsCard" style="display:none">
+        <div class="card-title">Progress</div>
+        <div class="steps" id="steps"></div>
+      </div>
+
+      <div class="card" id="infoCard" style="display:none">
+        <div class="card-title">Game Info</div>
+        <div class="pill-row" id="pillRow"></div>
+      </div>
+    </div>
+
+    <!-- STATCAST -->
+    <div id="panel-stats" class="panel">
+      <div class="card">
+        <div class="card-title">Statcast Pull — 2026</div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th>Player</th><th>Role</th><th>Team</th>
+              <th>BRL%</th><th>EV</th><th>EV50</th><th>HH%</th>
+              <th>xwOBA</th><th>wOBA</th><th>GAP</th><th>SS%</th><th>Status</th>
+            </tr></thead>
+            <tbody id="statBody">
+              <tr><td colspan="12" class="na" style="padding:20px;text-align:center">Run a lineup to populate</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- PICKS -->
+    <div id="panel-picks" class="panel">
+      <div class="card" style="flex:1;display:flex;flex-direction:column">
+        <div class="card-title">Sharp Oracle — Picks</div>
+        <div class="result-box" id="result">Run a lineup to see picks...</div>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
-let pollTimer = null;
-let curJid = null;
+let pollTimer = null, curJid = null;
 
-// Check cache status on load
 fetch('/api/status').then(r=>r.json()).then(d=>{
-  const el = document.getElementById('cacheStatus');
-  const n = d.cache_players || 0;
-  if(n > 100) el.innerHTML = `<span style="color:#22c55e">${n} players cached</span>`;
-  else el.innerHTML = `<span style="color:#f97316">Cache loading...</span>`;
-}).catch(()=>{});
+  const n = d.cache_players||0;
+  document.getElementById('cacheStatus').innerHTML =
+    n>100 ? `<span style="color:#22c55e">${n} players</span>` :
+    `<span style="color:#f97316">loading cache...</span>`;
+}).catch(()=>{document.getElementById('cacheStatus').textContent='offline'});
 
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach((t,i)=>{
-    const names = ['analyze','stats','result'];
-    t.classList.toggle('active', names[i]===name);
-  });
-  document.querySelectorAll('.tab-content').forEach(c=>{
-    c.classList.toggle('active', c.id==='tab-'+name);
-  });
+function show(name) {
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+  event.currentTarget.classList.add('active');
 }
 
 function runModel() {
   const txt = document.getElementById('lineup').value.trim();
-  if (!txt) return;
+  if(!txt) return;
   document.getElementById('runBtn').disabled = true;
   document.getElementById('result').textContent = 'Analyzing...';
   document.getElementById('stepsCard').style.display = '';
   document.getElementById('infoCard').style.display = 'none';
-  switchTab('analyze');
+  show('analyze'); document.querySelector('[onclick="show(\'analyze\')"]').classList.add('active');
 
-  fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({lineup:txt})})
+  fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lineup:txt})})
   .then(r=>r.json())
-  .then(d=>{
-    curJid = d.jid;
-    pollTimer = setInterval(poll, 1500);
-  })
-  .catch(e=>{
-    document.getElementById('runBtn').disabled = false;
-    alert('Error: '+e);
-  });
+  .then(d=>{curJid=d.jid; pollTimer=setInterval(poll,1500)})
+  .catch(e=>{document.getElementById('runBtn').disabled=false; alert('Error: '+e)});
 }
 
 function poll() {
-  if (!curJid) return;
-  fetch('/api/poll?jid='+curJid)
-  .then(r=>r.json())
-  .then(d=>{
+  if(!curJid) return;
+  fetch('/api/poll?jid='+curJid).then(r=>r.json()).then(d=>{
     updateSteps(d.steps||[]);
-    if(d.park_confirm && Object.keys(d.park_confirm).length>0) showInfo(d.park_confirm, d.bullpen||{});
-    if(d.statcast && d.statcast.length>0) showStats(d.statcast);
-    if(d.status==='done'){
+    if(d.park_confirm && Object.keys(d.park_confirm).length) showInfo(d.park_confirm, d.bullpen||{});
+    if(d.statcast && d.statcast.length) showStats(d.statcast);
+    if(d.status==='done'||d.status==='error') {
       clearInterval(pollTimer);
-      document.getElementById('result').textContent = d.result||'';
+      document.getElementById('result').textContent = d.status==='done' ? (d.result||'') : 'Error: '+(d.error||'');
       document.getElementById('runBtn').disabled = false;
-      switchTab('result');
-      // refresh cache status
+      // Switch to picks
+      document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+      document.getElementById('panel-picks').classList.add('active');
+      document.querySelector('[onclick="show(\'picks\')"]').classList.add('active');
       fetch('/api/status').then(r=>r.json()).then(s=>{
-        const el = document.getElementById('cacheStatus');
-        el.innerHTML = `<span style="color:#22c55e">${s.cache_players||0} players cached</span>`;
+        document.getElementById('cacheStatus').innerHTML=`<span style="color:#22c55e">${s.cache_players||0} players</span>`;
       });
-    } else if(d.status==='error'){
-      clearInterval(pollTimer);
-      document.getElementById('result').textContent = 'Error: '+(d.error||'unknown');
-      document.getElementById('runBtn').disabled = false;
-      switchTab('result');
     }
-  })
-  .catch(()=>{});
+  }).catch(()=>{});
 }
 
 function updateSteps(steps) {
-  const icons = ['◎','◉','✓','✓','✓'];
-  document.getElementById('steps').innerHTML = steps.map((s,i)=>{
+  document.getElementById('steps').innerHTML = steps.map(s=>{
     const icon = s.state==='done'?'✓':s.state==='active'?'◉':s.state==='error'?'✗':'○';
-    return `<div class="step ${s.state}">
-      <div class="step-icon">${icon}</div>
-      <span>${s.label||''}</span>
-    </div>`;
+    return `<div class="step ${s.state}">${icon} ${s.label||''}</div>`;
   }).join('');
 }
 
 function showInfo(p, pen) {
-  const flag = p.weather_flag||'';
-  const flagClass = flag.includes('SUPPRESSOR')||flag.includes('DOME') ? 'warn' :
-                    flag.includes('BOOST') ? 'good' : '';
+  const wflag = p.weather_flag||'';
+  const wc = wflag.includes('SUPPRESSOR')||wflag.includes('DOME')?'warn':wflag.includes('BOOST')?'good':'';
   const temp = p.temp_f ? p.temp_f+'°F' : 'N/A';
   const wind = p.wind_mph ? p.wind_mph+' mph' : 'N/A';
-  let penHtml = '';
-  if(pen && Object.keys(pen).length>0) {
-    penHtml = Object.entries(pen).map(([t,dd])=>{
-      const era = dd.era ? dd.era.toFixed(2) : 'N/A';
-      const cls = dd.tier==='WEAK' ? 'bad' : dd.tier==='AVERAGE' ? 'warn' : 'good';
-      return `<div class="pill ${cls}">${t} Pen: <b>${era} [${dd.tier}]</b></div>`;
-    }).join('');
-  }
-  document.getElementById('infoBar').innerHTML = `
+  let penHtml = Object.entries(pen||{}).map(([t,dd])=>{
+    const era = dd.era?dd.era.toFixed(2):'N/A';
+    const pc = dd.tier==='WEAK'?'bad':dd.tier==='AVERAGE'?'warn':'good';
+    return `<div class="pill ${pc}">${t}: <b>${era} [${dd.tier}]</b></div>`;
+  }).join('');
+  document.getElementById('pillRow').innerHTML = `
     <div class="pill">Park: <b>${p.park||'?'}</b></div>
-    <div class="pill">Category: <b>${p.category||'?'}</b></div>
-    <div class="pill ${flagClass}">Temp: <b>${temp} ${flag}</b></div>
+    <div class="pill">Type: <b>${p.category||'?'}</b></div>
+    <div class="pill ${wc}">Weather: <b>${temp} · ${wflag}</b></div>
     <div class="pill">Wind: <b>${wind}</b></div>
-    ${penHtml}
-  `;
+    ${penHtml}`;
   document.getElementById('infoCard').style.display = '';
 }
 
 function showStats(stats) {
-  const fv = (v, thr) => {
-    if(v==null) return `<span class="na">—</span>`;
-    const ok = v>=thr;
-    return `<span class="${ok?'hit':'miss'}">${typeof v==='number'?v.toFixed(1):v}</span>`;
-  };
-  const fw = (v) => v==null ? `<span class="na">—</span>` : v;
-
+  const fv = (v, thr) => v==null ? `<span class="na">—</span>` :
+    `<span class="${v>=thr?'hit':'miss'}">${typeof v==='number'?(thr<1?v.toFixed(3):v.toFixed(1)):v}</span>`;
+  const fw = v => v==null ? `<span class="na">—</span>` : (typeof v==='number'?v.toFixed(3):v);
   document.getElementById('statBody').innerHTML = stats.map(p=>{
     const gap = p.gap!=null ? (p.gap>=0?'+':'')+p.gap.toFixed(3) : '—';
-    const gapCls = p.gap==null ? 'na' : p.gap>=0.060 ? 'hit' : p.gap<=-0.060 ? 'warn-cell' : '';
-    const st = p.fetch_status==='ok' ? '<span class="hit">✓</span>' :
-               `<span class="warn-cell">⚠ ${p.fetch_status}</span>`;
-    const rowCls = p.role==='PITCHER' ? 'pitcher' : '';
-    return `<tr class="${rowCls}">
+    const gc = p.gap==null?'na':p.gap>=0.060?'hit':p.gap<=-0.060?'hot':'';
+    const ok = p.fetch_status==='ok';
+    return `<tr class="${p.role==='PITCHER'?'pitcher-row':''}">
       <td><b>${p.name||'?'}</b></td>
-      <td>${p.role||'?'}</td>
-      <td>${p.team||'?'}</td>
+      <td style="color:#475569">${p.role||'?'}</td>
+      <td style="color:#475569">${p.team||'?'}</td>
       <td>${fv(p.barrel_pct,15)}</td>
       <td>${fv(p.exit_velocity,91)}</td>
       <td>${fv(p.ev50,100)}</td>
       <td>${fv(p.hard_hit_pct,50)}</td>
       <td>${fv(p.xwoba,0.350)}</td>
-      <td>${fw(p.woba!=null?p.woba.toFixed(3):null)}</td>
-      <td class="${gapCls}">${gap}</td>
+      <td>${fw(p.woba)}</td>
+      <td class="${gc}">${gap}</td>
       <td>${fv(p.sweet_spot_pct,38)}</td>
-      <td>${st}</td>
+      <td>${ok?'<span class="hit">✓</span>':`<span class="na">⚠ ${p.fetch_status}</span>`}</td>
     </tr>`;
   }).join('');
-  // Auto switch to stats tab when data arrives
-  // (don't switch if already on result tab)
-  const active = document.querySelector('.tab.active');
-  if(active && active.textContent==='ANALYZE') switchTab('stats');
 }
 </script>
 </body>
