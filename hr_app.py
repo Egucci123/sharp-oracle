@@ -602,11 +602,28 @@ def fetch_weather(park_name):
             fc_req = urllib.request.Request(fc_url, headers={'User-Agent': 'SharpOracle/1.0', 'Accept': 'application/json'})
             with urllib.request.urlopen(fc_req, timeout=8) as r:
                 fc = json.loads(r.read())
-            period = fc['properties']['periods'][0]
-            temp_f    = safe_float(period.get('temperature'))
-            wind_str  = period.get('windSpeed', '0 mph')
+            periods = fc['properties']['periods']
+            # Find the period closest to game time (1pm local = 18:00 UTC roughly)
+            # Try to find a period between 11am-7pm today, else fall back to [0]
+            import datetime
+            now_utc = datetime.datetime.utcnow()
+            best = periods[0]
+            for p in periods[:12]:
+                start = p.get('startTime', '')
+                # Look for afternoon periods (11am-7pm)
+                try:
+                    dt = datetime.datetime.fromisoformat(start.replace('Z','+00:00'))
+                    # Convert to rough local time (subtract 4-6h for ET/CT)
+                    local_h = (dt.hour - 5) % 24
+                    if 11 <= local_h <= 19:
+                        best = p
+                        break
+                except Exception:
+                    pass
+            temp_f    = safe_float(best.get('temperature'))
+            wind_str  = best.get('windSpeed', '0 mph')
             wind_mph  = safe_float(wind_str.split()[0]) if wind_str else None
-            condition = period.get('shortForecast', 'Unknown')
+            condition = best.get('shortForecast', 'Unknown')
         except Exception:
             pass
 
@@ -1179,187 +1196,130 @@ HTML = r"""<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0e1a;color:#e2e8f0;font-family:'Segoe UI',sans-serif;min-height:100vh;display:flex;flex-direction:column}
-/* HEADER */
-.header{background:#060a14;border-bottom:2px solid #f7c948;padding:12px 20px;display:flex;align-items:center;gap:16px;flex-shrink:0}
-.logo{font-size:1.3em;font-weight:900;letter-spacing:3px;color:#f7c948}
+.header{background:#060a14;border-bottom:2px solid #f7c948;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.logo{font-size:1.2em;font-weight:900;letter-spacing:3px;color:#f7c948}
 .logo span{color:#e2e8f0;font-weight:300}
-.header-status{font-size:11px;color:#64748b;margin-left:auto;display:flex;align-items:center;gap:8px}
+.header-status{font-size:11px;color:#64748b;margin-left:auto;display:flex;align-items:center;gap:6px}
 .status-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;display:inline-block;box-shadow:0 0 6px #22c55e}
-/* LAYOUT */
-.layout{display:flex;flex:1;overflow:hidden;height:calc(100vh - 49px)}
-/* SIDEBAR */
-.sidebar{width:160px;background:#060a14;border-right:1px solid #1e3a5f;display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto}
-.nav-section{padding:10px 0}
-.nav-label{font-size:9px;font-weight:700;letter-spacing:1.5px;color:#334155;padding:6px 14px 4px;text-transform:uppercase}
-.nav-btn{display:block;width:100%;text-align:left;padding:8px 14px;font-size:12px;font-weight:600;color:#64748b;background:none;border:none;cursor:pointer;border-left:2px solid transparent;transition:all .15s;letter-spacing:.3px}
-.nav-btn:hover{color:#94a3b8;background:#0d1424}
-.nav-btn.active{color:#f7c948;border-left-color:#f7c948;background:#0d1424}
-/* MAIN */
-.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
-.panel{display:none;flex:1;overflow-y:auto;padding:16px}
-.panel.active{display:flex;flex-direction:column}
-/* CARDS */
-.card{background:#111827;border:1px solid #1e3a5f;border-radius:8px;padding:16px;margin-bottom:12px}
-.card-title{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#64748b;text-transform:uppercase;margin-bottom:10px}
-/* INPUT */
-textarea{width:100%;background:#080d18;color:#e2e8f0;border:1px solid #1e3a5f;border-radius:6px;padding:12px;font-size:13px;resize:vertical;min-height:180px;font-family:'Courier New',monospace;line-height:1.5}
+.topnav{background:#080d18;border-bottom:1px solid #1e3a5f;display:flex;overflow-x:auto;flex-shrink:0;-webkit-overflow-scrolling:touch}
+.topnav::-webkit-scrollbar{height:0}
+.nav-btn{flex-shrink:0;padding:10px 18px;font-size:12px;font-weight:700;color:#475569;background:none;border:none;cursor:pointer;border-bottom:2px solid transparent;letter-spacing:.5px;white-space:nowrap;transition:all .15s}
+.nav-btn:hover{color:#94a3b8}
+.nav-btn.active{color:#f7c948;border-bottom-color:#f7c948}
+.panel{display:none;padding:12px;overflow-y:auto}
+.panel.active{display:block}
+.card{background:#111827;border:1px solid #1e3a5f;border-radius:8px;padding:14px;margin-bottom:10px}
+.card-title{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#64748b;text-transform:uppercase;margin-bottom:8px}
+textarea{width:100%;background:#080d18;color:#e2e8f0;border:1px solid #1e3a5f;border-radius:6px;padding:12px;font-size:13px;resize:vertical;min-height:160px;font-family:'Courier New',monospace;line-height:1.5}
 textarea:focus{outline:none;border-color:#f7c948}
 textarea::placeholder{color:#1e3a5f}
-.run-btn{background:#f7c948;color:#080d18;border:none;border-radius:6px;padding:11px;font-size:13px;font-weight:800;cursor:pointer;width:100%;margin-top:8px;letter-spacing:.5px;text-transform:uppercase}
+.run-btn{background:#f7c948;color:#080d18;border:none;border-radius:6px;padding:12px;font-size:14px;font-weight:800;cursor:pointer;width:100%;margin-top:8px;text-transform:uppercase}
 .run-btn:hover{background:#e6b800}
 .run-btn:disabled{background:#1e293b;color:#475569;cursor:not-allowed}
-/* STEPS */
 .steps{display:flex;flex-direction:column;gap:5px}
 .step{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;background:#080d18;border:1px solid #1e293b;font-size:12px;color:#475569}
-.step.active{border-color:#f7c948;color:#f7c948;background:#100e00}
-.step.done{border-color:#22c55e;color:#22c55e;background:#001008}
+.step.active{border-color:#f7c948;color:#f7c948}
+.step.done{border-color:#22c55e;color:#22c55e}
 .step.error{border-color:#ef4444;color:#ef4444}
-/* INFO PILLS */
-.pill-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.pill-row{display:flex;gap:8px;flex-wrap:wrap}
 .pill{background:#0d1424;border:1px solid #1e3a5f;border-radius:16px;padding:4px 12px;font-size:11px;color:#64748b}
-.pill b{color:#f7c948}
-.pill.bad b{color:#ef4444}
-.pill.warn b{color:#f97316}
-.pill.good b{color:#22c55e}
-/* STAT TABLE */
-.tbl-wrap{overflow-x:auto}
+.pill b{color:#f7c948}.pill.bad b{color:#ef4444}.pill.warn b{color:#f97316}.pill.good b{color:#22c55e}
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table{width:100%;border-collapse:collapse;font-size:12px;min-width:540px}
 th{background:#080d18;padding:7px 8px;text-align:left;color:#475569;font-weight:600;font-size:10px;letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid #1e3a5f;white-space:nowrap}
 td{padding:6px 8px;border-bottom:1px solid #0d1424;white-space:nowrap}
 tr:hover td{background:#0a0f1a}
 tr.pitcher-row td{background:#06090f}
-.hit{color:#22c55e;font-weight:700}
-.miss{color:#334155}
-.na{color:#1e3a5f}
-.hot{color:#ef4444}
-/* RESULT */
-.result-box{background:#080d18;border:1px solid #1e3a5f;border-radius:6px;padding:16px;white-space:pre-wrap;font-family:'Courier New',monospace;font-size:13px;line-height:1.7;flex:1}
+.hit{color:#22c55e;font-weight:700}.miss{color:#334155}.na{color:#1e3a5f}.hot{color:#ef4444}
+.result-box{background:#080d18;border:1px solid #1e3a5f;border-radius:6px;padding:16px;white-space:pre-wrap;font-family:'Courier New',monospace;font-size:13px;line-height:1.8;width:100%}
+@media(max-width:600px){.result-box{font-size:12px;padding:12px}.logo{font-size:1em;letter-spacing:2px}}
 </style>
 </head>
 <body>
-
 <div class="header">
   <div class="logo">⚡ SHARP<span> ORACLE</span></div>
-  <div class="header-status">
-    <span class="status-dot"></span>
-    <span id="cacheStatus">checking...</span>
+  <div class="header-status"><span class="status-dot"></span><span id="cacheStatus">checking...</span></div>
+</div>
+<div class="topnav">
+  <button class="nav-btn active" onclick="show('analyze',this)">ANALYZE</button>
+  <button class="nav-btn" onclick="show('stats',this)">STATCAST</button>
+  <button class="nav-btn" onclick="show('picks',this)">PICKS</button>
+</div>
+
+<div id="panel-analyze" class="panel active">
+  <div class="card">
+    <div class="card-title">Lineup Input</div>
+    <textarea id="lineup" placeholder="Paste lineup here...&#10;&#10;AwayTeam @ HomeTeam&#10;Pitcher Name (Hand)&#10;1. Batter Name (Hand) POS"></textarea>
+    <button class="run-btn" id="runBtn" onclick="runModel()">▶ RUN MODEL</button>
+  </div>
+  <div class="card" id="stepsCard" style="display:none">
+    <div class="card-title">Progress</div>
+    <div class="steps" id="steps"></div>
+  </div>
+  <div class="card" id="infoCard" style="display:none">
+    <div class="card-title">Game Info</div>
+    <div class="pill-row" id="pillRow"></div>
   </div>
 </div>
 
-<div class="layout">
-  <div class="sidebar">
-    <div class="nav-section">
-      <div class="nav-label">Model</div>
-      <button class="nav-btn active" onclick="show('analyze')">ANALYZE</button>
-      <button class="nav-btn" onclick="show('stats')">STATCAST</button>
-    </div>
-    <div class="nav-section">
-      <div class="nav-label">Results</div>
-      <button class="nav-btn" onclick="show('picks')">PICKS</button>
-    </div>
-  </div>
-
-  <div class="main">
-    <!-- ANALYZE -->
-    <div id="panel-analyze" class="panel active">
-      <div class="card">
-        <div class="card-title">Lineup Input</div>
-        <textarea id="lineup" placeholder="Paste lineup here...
-
-AwayTeam @ HomeTeam
-Pitcher Name (Hand)
-1. Batter Name (Hand) POS
-..."></textarea>
-        <button class="run-btn" id="runBtn" onclick="runModel()">▶ RUN MODEL</button>
-      </div>
-
-      <div class="card" id="stepsCard" style="display:none">
-        <div class="card-title">Progress</div>
-        <div class="steps" id="steps"></div>
-      </div>
-
-      <div class="card" id="infoCard" style="display:none">
-        <div class="card-title">Game Info</div>
-        <div class="pill-row" id="pillRow"></div>
-      </div>
-    </div>
-
-    <!-- STATCAST -->
-    <div id="panel-stats" class="panel">
-      <div class="card">
-        <div class="card-title">Statcast Pull — 2026</div>
-        <div class="tbl-wrap">
-          <table>
-            <thead><tr>
-              <th>Player</th><th>Role</th><th>Team</th>
-              <th>BRL%</th><th>EV</th><th>EV50</th><th>HH%</th>
-              <th>xwOBA</th><th>wOBA</th><th>GAP</th><th>SS%</th><th>Status</th>
-            </tr></thead>
-            <tbody id="statBody">
-              <tr><td colspan="12" class="na" style="padding:20px;text-align:center">Run a lineup to populate</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- PICKS -->
-    <div id="panel-picks" class="panel">
-      <div class="card" style="flex:1;display:flex;flex-direction:column">
-        <div class="card-title">Sharp Oracle — Picks</div>
-        <div class="result-box" id="result">Run a lineup to see picks...</div>
-      </div>
+<div id="panel-stats" class="panel">
+  <div class="card">
+    <div class="card-title">Statcast — 2026</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Player</th><th>Role</th><th>Team</th>
+          <th>BRL%</th><th>EV</th><th>EV50</th><th>HH%</th>
+          <th>xwOBA</th><th>wOBA</th><th>GAP</th><th>SS%</th><th>OK</th>
+        </tr></thead>
+        <tbody id="statBody"><tr><td colspan="12" class="na" style="padding:20px;text-align:center">Run a lineup to populate</td></tr></tbody>
+      </table>
     </div>
   </div>
+</div>
+
+<div id="panel-picks" class="panel">
+  <div class="result-box" id="result">Run a lineup to see picks...</div>
 </div>
 
 <script>
-let pollTimer = null, curJid = null;
-
+let pollTimer=null,curJid=null;
 fetch('/api/status').then(r=>r.json()).then(d=>{
-  const n = d.cache_players||0;
-  document.getElementById('cacheStatus').innerHTML =
-    n>100 ? `<span style="color:#22c55e">${n} players</span>` :
-    `<span style="color:#f97316">loading cache...</span>`;
+  const n=d.cache_players||0;
+  document.getElementById('cacheStatus').innerHTML=n>100?`<span style="color:#22c55e">${n} players</span>`:`<span style="color:#f97316">loading...</span>`;
 }).catch(()=>{document.getElementById('cacheStatus').textContent='offline'});
 
-function show(name) {
+function show(name,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
-  event.currentTarget.classList.add('active');
+  if(btn)btn.classList.add('active');
 }
 
-function runModel() {
-  const txt = document.getElementById('lineup').value.trim();
-  if(!txt) return;
-  document.getElementById('runBtn').disabled = true;
-  document.getElementById('result').textContent = 'Analyzing...';
-  document.getElementById('stepsCard').style.display = '';
-  document.getElementById('infoCard').style.display = 'none';
-  show('analyze'); document.querySelector('[onclick="show(\'analyze\')"]').classList.add('active');
-
+function runModel(){
+  const txt=document.getElementById('lineup').value.trim();
+  if(!txt)return;
+  document.getElementById('runBtn').disabled=true;
+  document.getElementById('result').textContent='Analyzing...';
+  document.getElementById('stepsCard').style.display='';
+  document.getElementById('infoCard').style.display='none';
+  show('analyze',document.querySelector('.nav-btn'));
   fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lineup:txt})})
-  .then(r=>r.json())
-  .then(d=>{curJid=d.jid; pollTimer=setInterval(poll,1500)})
-  .catch(e=>{document.getElementById('runBtn').disabled=false; alert('Error: '+e)});
+  .then(r=>r.json()).then(d=>{curJid=d.jid;pollTimer=setInterval(poll,1500)})
+  .catch(e=>{document.getElementById('runBtn').disabled=false;alert('Error: '+e)});
 }
 
-function poll() {
-  if(!curJid) return;
+function poll(){
+  if(!curJid)return;
   fetch('/api/poll?jid='+curJid).then(r=>r.json()).then(d=>{
     updateSteps(d.steps||[]);
-    if(d.park_confirm && Object.keys(d.park_confirm).length) showInfo(d.park_confirm, d.bullpen||{});
-    if(d.statcast && d.statcast.length) showStats(d.statcast);
-    if(d.status==='done'||d.status==='error') {
+    if(d.park_confirm&&Object.keys(d.park_confirm).length)showInfo(d.park_confirm,d.bullpen||{});
+    if(d.statcast&&d.statcast.length)showStats(d.statcast);
+    if(d.status==='done'||d.status==='error'){
       clearInterval(pollTimer);
-      document.getElementById('result').textContent = d.status==='done' ? (d.result||'') : 'Error: '+(d.error||'');
-      document.getElementById('runBtn').disabled = false;
-      // Switch to picks
-      document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-      document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
-      document.getElementById('panel-picks').classList.add('active');
-      document.querySelector('[onclick="show(\'picks\')"]').classList.add('active');
+      document.getElementById('result').textContent=d.status==='done'?(d.result||''):'Error: '+(d.error||'');
+      document.getElementById('runBtn').disabled=false;
+      show('picks',document.querySelectorAll('.nav-btn')[2]);
       fetch('/api/status').then(r=>r.json()).then(s=>{
         document.getElementById('cacheStatus').innerHTML=`<span style="color:#22c55e">${s.cache_players||0} players</span>`;
       });
@@ -1367,55 +1327,46 @@ function poll() {
   }).catch(()=>{});
 }
 
-function updateSteps(steps) {
-  document.getElementById('steps').innerHTML = steps.map(s=>{
-    const icon = s.state==='done'?'✓':s.state==='active'?'◉':s.state==='error'?'✗':'○';
+function updateSteps(steps){
+  document.getElementById('steps').innerHTML=steps.map(s=>{
+    const icon=s.state==='done'?'✓':s.state==='active'?'◉':s.state==='error'?'✗':'○';
     return `<div class="step ${s.state}">${icon} ${s.label||''}</div>`;
   }).join('');
 }
 
-function showInfo(p, pen) {
-  const wflag = p.weather_flag||'';
-  const wc = wflag.includes('SUPPRESSOR')||wflag.includes('DOME')?'warn':wflag.includes('BOOST')?'good':'';
-  const temp = p.temp_f ? p.temp_f+'°F' : 'N/A';
-  const wind = p.wind_mph ? p.wind_mph+' mph' : 'N/A';
-  let penHtml = Object.entries(pen||{}).map(([t,dd])=>{
-    const era = dd.era?dd.era.toFixed(2):'N/A';
-    const pc = dd.tier==='WEAK'?'bad':dd.tier==='AVERAGE'?'warn':'good';
+function showInfo(p,pen){
+  const wc=(p.weather_flag||'').includes('SUPPRESSOR')||(p.weather_flag||'')==='DOME'?'warn':(p.weather_flag||'').includes('BOOST')?'good':'';
+  const temp=p.temp_f?p.temp_f+'°F':'N/A';
+  const wind=p.wind_mph?p.wind_mph+' mph':'N/A';
+  const penHtml=Object.entries(pen||{}).map(([t,dd])=>{
+    const era=dd.era?dd.era.toFixed(2):'N/A';
+    const pc=dd.tier==='WEAK'?'bad':dd.tier==='AVERAGE'?'warn':'good';
     return `<div class="pill ${pc}">${t}: <b>${era} [${dd.tier}]</b></div>`;
   }).join('');
-  document.getElementById('pillRow').innerHTML = `
+  document.getElementById('pillRow').innerHTML=`
     <div class="pill">Park: <b>${p.park||'?'}</b></div>
     <div class="pill">Type: <b>${p.category||'?'}</b></div>
-    <div class="pill ${wc}">Weather: <b>${temp} · ${wflag}</b></div>
-    <div class="pill">Wind: <b>${wind}</b></div>
-    ${penHtml}`;
-  document.getElementById('infoCard').style.display = '';
+    <div class="pill ${wc}">Weather: <b>${temp} · ${p.weather_flag||'?'}</b></div>
+    <div class="pill">Wind: <b>${wind}</b></div>${penHtml}`;
+  document.getElementById('infoCard').style.display='';
 }
 
-function showStats(stats) {
-  const fv = (v, thr) => v==null ? `<span class="na">—</span>` :
-    `<span class="${v>=thr?'hit':'miss'}">${typeof v==='number'?(thr<1?v.toFixed(3):v.toFixed(1)):v}</span>`;
-  const fw = v => v==null ? `<span class="na">—</span>` : (typeof v==='number'?v.toFixed(3):v);
-  document.getElementById('statBody').innerHTML = stats.map(p=>{
-    const gap = p.gap!=null ? (p.gap>=0?'+':'')+p.gap.toFixed(3) : '—';
-    const gc = p.gap==null?'na':p.gap>=0.060?'hit':p.gap<=-0.060?'hot':'';
-    const ok = p.fetch_status==='ok';
+function showStats(stats){
+  const fv=(v,thr)=>v==null?`<span class="na">—</span>`:`<span class="${v>=thr?'hit':'miss'}">${typeof v==='number'?(thr<1?v.toFixed(3):v.toFixed(1)):v}</span>`;
+  const fw=v=>v==null?`<span class="na">—</span>`:(typeof v==='number'?v.toFixed(3):v);
+  document.getElementById('statBody').innerHTML=stats.map(p=>{
+    const gap=p.gap!=null?(p.gap>=0?'+':'')+p.gap.toFixed(3):'—';
+    const gc=p.gap==null?'na':p.gap>=0.060?'hit':p.gap<=-0.060?'hot':'';
     return `<tr class="${p.role==='PITCHER'?'pitcher-row':''}">
-      <td><b>${p.name||'?'}</b></td>
-      <td style="color:#475569">${p.role||'?'}</td>
-      <td style="color:#475569">${p.team||'?'}</td>
-      <td>${fv(p.barrel_pct,15)}</td>
-      <td>${fv(p.exit_velocity,91)}</td>
-      <td>${fv(p.ev50,100)}</td>
-      <td>${fv(p.hard_hit_pct,50)}</td>
-      <td>${fv(p.xwoba,0.350)}</td>
-      <td>${fw(p.woba)}</td>
-      <td class="${gc}">${gap}</td>
-      <td>${fv(p.sweet_spot_pct,38)}</td>
-      <td>${ok?'<span class="hit">✓</span>':`<span class="na">⚠ ${p.fetch_status}</span>`}</td>
+      <td><b>${p.name||'?'}</b></td><td style="color:#475569">${p.role||'?'}</td><td style="color:#475569">${p.team||'?'}</td>
+      <td>${fv(p.barrel_pct,15)}</td><td>${fv(p.exit_velocity,91)}</td><td>${fv(p.ev50,100)}</td>
+      <td>${fv(p.hard_hit_pct,50)}</td><td>${fv(p.xwoba,0.350)}</td><td>${fw(p.woba)}</td>
+      <td class="${gc}">${gap}</td><td>${fv(p.sweet_spot_pct,38)}</td>
+      <td>${p.fetch_status==='ok'?'<span class="hit">✓</span>':'<span class="na">⚠</span>'}</td>
     </tr>`;
   }).join('');
+  if(document.getElementById('panel-analyze').classList.contains('active'))
+    show('stats',document.querySelectorAll('.nav-btn')[1]);
 }
 </script>
 </body>
