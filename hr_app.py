@@ -271,35 +271,38 @@ def _daily_refresh_loop():
 
 def load_stats_cache():
     """
-    Load stats from auto-downloaded CSV files (statcast_batters.csv, etc).
-    Falls back to live endpoints if files not yet downloaded.
-    Returns dict keyed by normalized player name.
-    Thread-safe: only one load runs at a time.
+    Load stats from auto-downloaded CSV files.
+    Thread-safe: blocks until cache is fully loaded.
+    Returns the global _stats_cache dict.
     """
     global _stats_cache, _stats_loaded, _stats_loading
-    # Fast path  -  already loaded
+
+    # Fast path
     with _stats_lock:
         if _stats_loaded:
             return _stats_cache
-        # If another thread is loading, wait for it
-        if _stats_loading:
-            pass  # fall through to wait loop below
 
-    # Wait if another thread is currently loading
-    waited = 0
-    while True:
+    # Need to load — claim or wait
+    i_claimed = False
+    with _stats_lock:
+        if not _stats_loading:
+            _stats_loading = True
+            _stats_cache = {}
+            i_claimed = True
+
+    if not i_claimed:
+        # Another thread is loading — wait for it
+        for _ in range(300):  # wait up to 60s
+            time.sleep(0.2)
+            with _stats_lock:
+                if _stats_loaded:
+                    return _stats_cache
+        # Timed out — return whatever we have
         with _stats_lock:
-            if _stats_loaded:
-                return _stats_cache
-            if not _stats_loading:
-                # Claim the load
-                _stats_loading = True
-                _stats_cache = {}
-                break
-        time.sleep(0.2)
-        waited += 0.2
-        if waited > 60:
-            break  # give up waiting
+            return _stats_cache
+
+    # Only the thread that claimed i_claimed=True reaches here
+    # Load the CSVs and populate _stats_cache
 
     def parse_name(row):
         """Extract player name from CSV or JSON row."""
@@ -1214,18 +1217,9 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         # STEP 3: Statcast fetch
         step_set(jid, 2, 'active', 'Fetching Statcast...')
 
-        # Load cache ONCE — read global directly after wait, don't call load_stats_cache() again
-        # which could re-enter the loading logic
-        waited = 0
-        while not _stats_loaded and waited < 30:
-            time.sleep(1)
-            waited += 1
-        if not _stats_loaded:
-            # Force load now
-            load_stats_cache()
-        with _stats_lock:
-            cache = dict(_stats_cache)  # snapshot — immune to concurrent modifications
-        print(f"[STATS] Cache snapshot: {len(cache)} players (waited {waited}s)")
+        # Block until cache is fully loaded, then get it
+        cache = load_stats_cache()
+        print(f"[STATS] Cache: {len(cache)} players")
 
         hp = parsed.get('home_pitcher', {})
         ap = parsed.get('away_pitcher', {})
