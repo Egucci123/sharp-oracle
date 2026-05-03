@@ -1214,13 +1214,18 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         # STEP 3: Statcast fetch
         step_set(jid, 2, 'active', 'Fetching Statcast...')
 
-        # Load cache ONCE here — pass to all workers so they never re-enter load_stats_cache
+        # Load cache ONCE — read global directly after wait, don't call load_stats_cache() again
+        # which could re-enter the loading logic
         waited = 0
         while not _stats_loaded and waited < 30:
             time.sleep(1)
             waited += 1
-        cache = load_stats_cache()
-        print(f"[STATS] Cache ready: {len(cache)} players (waited {waited}s)")
+        if not _stats_loaded:
+            # Force load now
+            load_stats_cache()
+        with _stats_lock:
+            cache = dict(_stats_cache)  # snapshot — immune to concurrent modifications
+        print(f"[STATS] Cache snapshot: {len(cache)} players (waited {waited}s)")
 
         hp = parsed.get('home_pitcher', {})
         ap = parsed.get('away_pitcher', {})
