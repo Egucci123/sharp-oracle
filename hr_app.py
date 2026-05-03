@@ -406,18 +406,17 @@ def clear_stats_cache():
         _stats_loaded = False
         _stats_loading = False
 
-def get_cached_stats(name):
+def get_cached_stats(name, cache=None):
     """Look up player by name from bulk cache."""
-    cache = load_stats_cache()
+    if cache is None:
+        cache = load_stats_cache()
     key = normalize_name(name).lower()
     if key in cache:
         return cache[key]
     parts = key.split()
     if len(parts) >= 2:
-        # Try first+last
         if f'{parts[0]} {parts[-1]}' in cache:
             return cache[f'{parts[0]} {parts[-1]}']
-        # Try last, first (some leaderboards use this format)
         if f'{parts[-1]}, {parts[0]}' in cache:
             return cache[f'{parts[-1]}, {parts[0]}']
     return None
@@ -465,11 +464,12 @@ def scrape_player_page(player_name):
     return stats if stats.get('xwoba') is not None else None
 
 # ─── FETCH ONE PLAYER ─────────────────────────────────────────────────────────
-def fetch_one_player(info):
+def fetch_one_player(info, cache=None):
     """
     Fetch stats for one player.
     1. Try bulk leaderboard cache (name lookup)
     2. Fall back to Savant page scrape
+    cache param: pre-loaded cache dict to avoid repeated load_stats_cache() calls
     """
     name = info.get('name', '').strip()
     result = {
@@ -487,8 +487,8 @@ def fetch_one_player(info):
         result['fetch_status'] = 'no name'
         return result
 
-    # SOURCE 1: bulk cache
-    row = get_cached_stats(name)
+    # SOURCE 1: bulk cache — use pre-loaded cache if provided
+    row = get_cached_stats(name, cache=cache)
     if row:
         def g(row, *keys):
             for k in keys:
@@ -555,9 +555,14 @@ def fetch_one_player(info):
 
     return result
 
-def fetch_all_parallel(players, workers=12):
+def fetch_all_parallel(players, workers=12, cache=None):
+    """Fetch all players in parallel. Cache loaded once and shared across all workers."""
+    if cache is None:
+        cache = load_stats_cache()
+    import functools
+    fetch = functools.partial(fetch_one_player, cache=cache)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-        return list(ex.map(fetch_one_player, players))
+        return list(ex.map(fetch, players))
 
 # ─── WEATHER ─────────────────────────────────────────────────────────────────
 PARK_COORDS = {
@@ -1209,7 +1214,7 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         # STEP 3: Statcast fetch
         step_set(jid, 2, 'active', 'Fetching Statcast...')
 
-        # Wait for CSV cache to be fully loaded (max 30s)
+        # Load cache ONCE here — pass to all workers so they never re-enter load_stats_cache
         waited = 0
         while not _stats_loaded and waited < 30:
             time.sleep(1)
@@ -1231,8 +1236,9 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         for b in parsed.get('away_batters', []):
             batter_list.append({**b, 'role': 'BATTER', 'team': away})
 
-        pitcher_stats = fetch_all_parallel(pitcher_list, workers=2)
-        batter_stats  = fetch_all_parallel(batter_list, workers=12)
+        # Pass cache directly — no re-loading in parallel workers
+        pitcher_stats = fetch_all_parallel(pitcher_list, workers=2, cache=cache)
+        batter_stats  = fetch_all_parallel(batter_list, workers=12, cache=cache)
         all_statcast  = pitcher_stats + batter_stats
 
         ok = sum(1 for x in all_statcast if x.get('fetch_status') == 'ok')
