@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-SHARP ORACLE — HR Prop Model
-Clean architecture: lineup paste → home/away verify → weather → stats → bullpen ERA → analysis
+SHARP ORACLE  -  HR Prop Model
+Clean architecture: lineup paste -> home/away verify -> weather -> stats -> bullpen ERA -> analysis
 Output: TOP 5 HR BETS + TOP 5 HIT BETS only
 """
 import json
@@ -71,16 +71,16 @@ WEATHER: >=85F=boost | <=50F=suppress | <=45F=hard suppress
 """
 
 SYSTEM_PROMPT = (
-    "You are Marcus Cole — the sharpest MLB prop analyst alive. 20 years reading Statcast before it was cool. "
+    "You are Marcus Cole  -  the sharpest MLB prop analyst alive. 20 years reading Statcast before it was cool. "
     "You connect dots nobody else sees. You find the 7th-spot batter with a COLD-BUY gap the market ignores. "
-    "You go three levels deep on every pick. Be specific — never generic stat recitation.\n\n"
+    "You go three levels deep on every pick. Be specific  -  never generic stat recitation.\n\n"
     "PROCESS (do this in your head before writing a single word):\n"
     "- Score every batter: Barrel%>=15, xwOBA>=.350, EV>=91, HH%>=50 = 1pt each\n"
     "- Set pitcher gates, apply GB%/CSW% modifiers\n"
     "- Apply platoon edges, gap signals, park, weather, bullpen ERA\n"
     "- Run all 14 upgrades\n"
     "- Use EV50, SS%, FB/LD EV, HR distance as tiebreakers and sharp angles\n"
-    "- SLEEPER SCAN — run this on every batter before finalizing picks:\n"
+    "- SLEEPER SCAN  -  run this on every batter before finalizing picks:\n"
     "  * GAP>=+.060 in lineup spots 6-9 = market ignoring regression, price is wrong\n"
     "  * EV50>=103 + SS%>=35 + any COLD gap = elite power the market underweights\n"
     "  * Brl/PA>=10 + HOT gap = true power rate masked by results, buy the skill not the outcome\n"
@@ -88,22 +88,22 @@ SYSTEM_PROMPT = (
     "  * xwOBA>=.380 + wOBA<.310 = extreme cold gap, massive regression candidate\n"
     "  * 0/4 or 1/4 score BUT EV50>=104 = raw power tool that thresholds miss\n"
     "  If a batter hits 2+ sleeper signals, they belong in HR picks even over higher-graded chalk.\n\n"
-    "DOUBLE SCRUTINY — before finalizing ANY pick, run this checklist:\n"
+    "DOUBLE SCRUTINY  -  before finalizing ANY pick, run this checklist:\n"
     "  HR picks: Does the pitcher gate allow it? Is platoon favorable? Is GAP not HOT-EXTREME? "
     "Is weather not a hard suppressor killing carry? Is park not a double suppressor? "
-    "If any of these kill it — DROP the pick and find a better one.\n"
+    "If any of these kill it  -  DROP the pick and find a better one.\n"
     "  HIT picks: Is wOBA>=.300? Is EV>=85 (can they make contact)? Is platoon not a disaster? "
-    "HOT gap = yes. COLD gap + high xwOBA = yes. If they pass — keep it.\n"
+    "HOT gap = yes. COLD gap + high xwOBA = yes. If they pass  -  keep it.\n"
     "  Only 2 picks each. Make them COUNT. Zero chalk. Find the real edge.\n\n"
     "DATA RULES: Use ONLY pre-computed scores and flags in the context. "
     "GAP positive = COLD (buy regression). GAP negative = HOT (fade HR, hits still fine). "
     "[PROXY] = no 2026 data, max B grade.\n\n"
-    "OUTPUT: Write your full sharp analysis — batter grades, upgrades, park/weather layer, "
+    "OUTPUT: Write your full sharp analysis  -  batter grades, upgrades, park/weather layer, "
     "angles the market is missing. Apply double scrutiny to every candidate. "
     "Then ALWAYS end with BOTH sections below, no exceptions.\n\n"
     "══════════════════════════════════════\n"
     "TOP 2 HR BETS:\n"
-    "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences — if sleeper start with 🔥 SLEEPER:]\n"
+    "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences  -  if sleeper start with 🔥 SLEEPER:]\n"
     "2. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n\n"
     "TOP 2 HIT BETS:\n"
     "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
@@ -208,20 +208,21 @@ def call_claude(messages, system=None, max_tokens=4096):
 # ─── STATS CACHE (bulk leaderboard, loaded once per run) ─────────────────────
 _stats_cache = {}
 _stats_loaded = False
+_stats_loading = False
 _stats_lock = threading.Lock()
 _csv_dir = os.path.dirname(os.path.abspath(__file__))
 
 def _download_csvs():
     """Download Savant CSVs fresh. Called at startup and daily at midnight."""
     urls = [
-        # Exit velocity CSV — has ev50, fbld, gb_ev, sweet_spot%, avg_hr_dist, max_hit_speed
+        # Exit velocity CSV  -  has ev50, fbld, gb_ev, sweet_spot%, avg_hr_dist, max_hit_speed
         ('statcast_batters.csv',
          f'https://baseballsavant.mlb.com/leaderboard/statcast'
          f'?type=batter&year={CURRENT_YEAR}&position=&team=&min=1&csv=true'),
         ('statcast_pitchers.csv',
          f'https://baseballsavant.mlb.com/leaderboard/statcast'
          f'?type=pitcher&year={CURRENT_YEAR}&position=&team=&min=1&csv=true'),
-        # Expected stats CSV — has xwOBA, wOBA, barrel_batted_rate, hard_hit_percent
+        # Expected stats CSV  -  has xwOBA, wOBA, barrel_batted_rate, hard_hit_percent
         ('expected_batters.csv',
          f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
          f'?type=batter&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
@@ -236,11 +237,11 @@ def _download_csvs():
             if raw and len(raw) > 1000 and not raw.strip().startswith('<'):
                 with open(path, 'w', encoding='utf-8') as f:
                     f.write(raw)
-                print(f"[CSV DOWNLOAD] {filename} — {len(raw)} bytes")
+                print(f"[CSV DOWNLOAD] {filename}  -  {len(raw)} bytes")
             else:
-                print(f"[CSV DOWNLOAD] {filename} — FAILED (got HTML or empty)")
+                print(f"[CSV DOWNLOAD] {filename}  -  FAILED (got HTML or empty)")
         except Exception as e:
-            print(f"[CSV DOWNLOAD] {filename} — ERROR: {e}")
+            print(f"[CSV DOWNLOAD] {filename}  -  ERROR: {e}")
 
 def _daily_refresh_loop():
     """Background thread: refresh CSVs once at startup, then daily at midnight ET."""
@@ -252,9 +253,9 @@ def _daily_refresh_loop():
     # Then reset cache and re-download at midnight every day
     while True:
         now = datetime.datetime.utcnow()
-        # Midnight UTC = 8pm ET / 7pm CT — good time for next-day data
+        # Midnight UTC = 8pm ET / 7pm CT  -  good time for next-day data
         tomorrow = (now + datetime.timedelta(days=1)).replace(
-            hour=0, minute=5, second=0, microsecond=0)
+            hour=15, minute=0, second=0, microsecond=0)  # 11am ET = 15:00 UTC
         sleep_secs = (tomorrow - now).total_seconds()
         print(f"[CSV REFRESH] Next refresh in {sleep_secs/3600:.1f} hours")
         time.sleep(max(sleep_secs, 3600))
@@ -262,22 +263,43 @@ def _daily_refresh_loop():
         _download_csvs()
         # Reset cache so next run picks up fresh data
         with _stats_lock:
-            global _stats_cache, _stats_loaded
+            global _stats_cache, _stats_loaded, _stats_loading
             _stats_cache = {}
             _stats_loaded = False
-        print("[CSV REFRESH] Daily refresh complete — cache cleared")
+            _stats_loading = False
+        print("[CSV REFRESH] Daily refresh complete  -  cache cleared")
 
 def load_stats_cache():
     """
     Load stats from auto-downloaded CSV files (statcast_batters.csv, etc).
     Falls back to live endpoints if files not yet downloaded.
     Returns dict keyed by normalized player name.
+    Thread-safe: only one load runs at a time.
     """
-    global _stats_cache, _stats_loaded
+    global _stats_cache, _stats_loaded, _stats_loading
+    # Fast path  -  already loaded
     with _stats_lock:
         if _stats_loaded:
             return _stats_cache
-        _stats_cache = {}
+        # If another thread is loading, wait for it
+        if _stats_loading:
+            pass  # fall through to wait loop below
+
+    # Wait if another thread is currently loading
+    waited = 0
+    while True:
+        with _stats_lock:
+            if _stats_loaded:
+                return _stats_cache
+            if not _stats_loading:
+                # Claim the load
+                _stats_loading = True
+                _stats_cache = {}
+                break
+        time.sleep(0.2)
+        waited += 0.2
+        if waited > 60:
+            break  # give up waiting
 
     def parse_name(row):
         """Extract player name from CSV or JSON row."""
@@ -344,7 +366,7 @@ def load_stats_cache():
                 pass
         return None
 
-    # PASS 1: statcast leaderboard — EV, HH%, Barrel%, GB% (auto-downloaded daily)
+    # PASS 1: statcast leaderboard  -  EV, HH%, Barrel%, GB% (auto-downloaded daily)
     for player_type, filename in [('batter', 'statcast_batters.csv'),
                                    ('pitcher', 'statcast_pitchers.csv')]:
         raw = load_local(filename)
@@ -352,13 +374,13 @@ def load_stats_cache():
             n = pull_endpoint_raw(raw, player_type)
             print(f"[STATS CACHE] {filename}={n} rows")
         else:
-            # File not yet downloaded — try live
+            # File not yet downloaded  -  try live
             url = (f'https://baseballsavant.mlb.com/leaderboard/statcast'
                    f'?type={player_type}&year={CURRENT_YEAR}&position=&team=&min=1&csv=true')
             n = pull_endpoint(url, player_type)
             print(f"[STATS CACHE] live statcast {player_type}={n}")
 
-    # PASS 2: expected_statistics — xwOBA, wOBA (merges into existing entries)
+    # PASS 2: expected_statistics  -  xwOBA, wOBA (merges into existing entries)
     for player_type, filename in [('batter', 'expected_batters.csv'),
                                    ('pitcher', 'expected_pitchers.csv')]:
         raw = load_local(filename)
@@ -374,13 +396,15 @@ def load_stats_cache():
     print(f"[STATS CACHE] Total players={len(_stats_cache)}")
     with _stats_lock:
         _stats_loaded = True
+        _stats_loading = False
     return _stats_cache
 
 def clear_stats_cache():
-    global _stats_cache, _stats_loaded
+    global _stats_cache, _stats_loaded, _stats_loading
     with _stats_lock:
         _stats_cache = {}
         _stats_loaded = False
+        _stats_loading = False
 
 def get_cached_stats(name):
     """Look up player by name from bulk cache."""
@@ -488,7 +512,7 @@ def fetch_one_player(info):
             'barrel_batted_rate',   # CSV expected_statistics + JSON
             'brl_bip_percent'))
         result['barrel_pa']     = sane('barrel_pct', g(row,
-            'brl_pa'))              # Barrel per PA — more stable
+            'brl_pa'))              # Barrel per PA  -  more stable
         result['xwoba']         = sane('xwoba', g(row,
             'est_woba',             # CSV expected_statistics
             'xwoba'))               # statcast / JSON
@@ -579,7 +603,7 @@ DOME_PARKS = {
 def fetch_weather(park_name):
     if park_name in DOME_PARKS:
         return {'temp_f': None, 'condition': 'Dome/Indoor', 'wind_mph': None,
-                'flag': 'DOME', 'notes': 'Dome — weather not applicable'}
+                'flag': 'DOME', 'notes': 'Dome  -  weather not applicable'}
 
     coords = PARK_COORDS.get(park_name)
     if not coords:
@@ -658,10 +682,10 @@ def fetch_weather(park_name):
         else:
             notes.append(f'{temp_f}F = neutral')
     else:
-        notes.append('Weather unavailable — neutral assumed')
+        notes.append('Weather unavailable  -  neutral assumed')
 
     if wind_mph and wind_mph >= 15:
-        notes.append(f'Wind {wind_mph}mph — check direction')
+        notes.append(f'Wind {wind_mph}mph  -  check direction')
 
     return {
         'temp_f': temp_f, 'condition': condition,
@@ -802,7 +826,7 @@ def parse_lineup(raw, game_date=None):
     Extracts: away_team, home_team, away_pitcher, home_pitcher,
               away_batters, home_batters (with hand, lineup_pos).
     """
-    prompt = f"""You are parsing an MLB lineup. It could be pasted from ANY source —
+    prompt = f"""You are parsing an MLB lineup. It could be pasted from ANY source  - 
 MLB.com, Rotowire, FantasyPros, ESPN, a plain text list, or anything else.
 Extract the information and return JSON only, no other text.
 
@@ -869,13 +893,13 @@ def compute_pitcher_gate(p):
     gb_flag = ''
     if gb is not None:
         if gb >= 55:
-            gb_flag = f' GB%={gb}(ELITE-SUPPRESSOR→gate+0.5)'
-            if gate == 'OPEN': gate = 'OPEN→HALF'
-            elif gate == 'HALF': gate = 'HALF→CLOSED'
+            gb_flag = f' GB%={gb}(ELITE-SUPPRESSOR->gate+0.5)'
+            if gate == 'OPEN': gate = 'OPEN->HALF'
+            elif gate == 'HALF': gate = 'HALF->CLOSED'
         elif gb >= 48:
             gb_flag = f' GB%={gb}(SOLID-GB)'
         else:
-            gb_flag = f' GB%={gb}(fly-ball-prone→batter-boost)'
+            gb_flag = f' GB%={gb}(fly-ball-prone->batter-boost)'
 
     # CSW% modifier
     csw_flag = ''
@@ -883,17 +907,17 @@ def compute_pitcher_gate(p):
         if csw >= 30:   csw_flag = f' CSW%={csw}(ELITE-MISS)'
         elif csw < 25:  csw_flag = f' CSW%={csw}(hittable)'
 
-    # EV50 — for pitchers, LOWER ev50 = better (softer contact allowed)
+    # EV50  -  for pitchers, LOWER ev50 = better (softer contact allowed)
     ev50_flag = ''
     if ev50 is not None:
         if ev50 >= 103:   ev50_flag = f' EV50={ev50}(DANGER-batters-squaring-up)'
         elif ev50 <= 96:  ev50_flag = f' EV50={ev50}(ELITE-soft-contact)'
 
-    # FB/LD EV for pitchers — lower = better
+    # FB/LD EV for pitchers  -  lower = better
     fbld_flag = ''
     if fbld is not None:
-        if fbld >= 95:   fbld_flag = f' FB/LD={fbld}(HARD-fly-balls→HR-risk)'
-        elif fbld <= 88: fbld_flag = f' FB/LD={fbld}(SOFT-fly-balls→suppressor)'
+        if fbld >= 95:   fbld_flag = f' FB/LD={fbld}(HARD-fly-balls->HR-risk)'
+        elif fbld <= 88: fbld_flag = f' FB/LD={fbld}(SOFT-fly-balls->suppressor)'
 
     pts = [
         f"EV={ev or 'N/A'}{'✓' if ev and ev>=93 else '✗'}",
@@ -916,12 +940,12 @@ def compute_batter_score(b):
     fbld   = b.get('fbld_ev')
     hr_dist= b.get('avg_hr_dist')
 
-    # Upgrade #2: Regression Gap — xwOBA>=.420 + gap>=+.100 → HH% threshold drops to 45%
+    # Upgrade #2: Regression Gap  -  xwOBA>=.420 + gap>=+.100 -> HH% threshold drops to 45%
     hh_threshold = 50.0
     upgrade2_flag = ''
     if xw is not None and xw >= 0.420 and gap is not None and gap >= 0.100:
         hh_threshold = 45.0
-        upgrade2_flag = ' [#2-REG-GAP:HH%→45]'
+        upgrade2_flag = ' [#2-REG-GAP:HH%->45]'
 
     score = sum([
         1 if (brl is not None and brl >= 15.0) else 0,
@@ -957,7 +981,7 @@ def compute_batter_score(b):
         elif ss >= 32: ss_flag = f' SS%={ss}(GOOD-LA)'
         else:          ss_flag = f' SS%={ss}(poor-LA)'
 
-    # FB/LD EV flag — contact quality on actual fly balls
+    # FB/LD EV flag  -  contact quality on actual fly balls
     fbld_flag = ''
     if fbld is not None:
         if fbld >= 95:   fbld_flag = f' FB/LD-EV={fbld}(ELITE)'
@@ -970,24 +994,24 @@ def compute_batter_score(b):
         elif hr_dist >= 390: hrd_flag = f' HR-DIST={hr_dist}(avg)'
         elif hr_dist > 0:    hrd_flag = f' HR-DIST={hr_dist}(short)'
 
-    # Barrel/PA — more stable power rate
+    # Barrel/PA  -  more stable power rate
     brl_pa_flag = ''
     if brl_pa is not None:
         if brl_pa >= 10: brl_pa_flag = f' Brl/PA={brl_pa}(ELITE)'
         elif brl_pa >= 6: brl_pa_flag = f' Brl/PA={brl_pa}'
 
-    # Upgrade #3: Elite Barrel — 4/4 + Barrel>=25% + positive gap
+    # Upgrade #3: Elite Barrel  -  4/4 + Barrel>=25% + positive gap
     upgrade3_flag = ''
     if score == 4 and brl is not None and brl >= 25.0 and gap is not None and gap > 0:
         upgrade3_flag = ' [#3-ELITE-BARREL:pitcher-cold-half-step]'
 
-    # Upgrade #10: Regression Bomb — gap>=+.100 + batting 1-5
+    # Upgrade #10: Regression Bomb  -  gap>=+.100 + batting 1-5
     upgrade10_flag = ''
     lineup_pos = b.get('lineup_pos', 99)
     if gap is not None and gap >= 0.100 and lineup_pos <= 5:
         upgrade10_flag = ' [#10-REG-BOMB:C-DART+400]'
 
-    # Upgrade #14: Elite Profile Park — Barrel>=20% + xwOBA>=.400 + 1-5
+    # Upgrade #14: Elite Profile Park  -  Barrel>=20% + xwOBA>=.400 + 1-5
     upgrade14_flag = ''
     if (brl is not None and brl >= 20.0 and
         xw is not None and xw >= 0.400 and
@@ -1024,7 +1048,7 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
         f"WEATHER NOTE: {wx.get('notes','')}",
         '',
         'VERIFIED ASSIGNMENTS:',
-        f"  HOME team: {home} — plays at {park_name}",
+        f"  HOME team: {home}  -  plays at {park_name}",
         f"  AWAY team: {away}",
     ]
 
@@ -1057,11 +1081,11 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
         era_str = f"{era:.2f}" if era else 'N/A'
         flag = ''
         if tier == 'WEAK':
-            flag = ' ⚠ WEAK PEN — #1/#5 ACTIVE: all Barrel>=15+xwOBA>=.350 batters facing this bullpen are live'
+            flag = ' ⚠ WEAK PEN  -  #1/#5 ACTIVE: all Barrel>=15+xwOBA>=.350 batters facing this bullpen are live'
             weak_pen_teams.append(team)
         lines.append(f"  {team}: ERA={era_str} [{tier}]{flag}")
     if weak_pen_teams:
-        lines.append(f"  BULLPEN TIER TEAMS: {weak_pen_teams} — flag ANY batter (Brl>=15+xwOBA>=.350) facing these pens")
+        lines.append(f"  BULLPEN TIER TEAMS: {weak_pen_teams}  -  flag ANY batter (Brl>=15+xwOBA>=.350) facing these pens")
 
     # Batters
     proxy_count = sum(1 for b in all_statcast
@@ -1082,7 +1106,7 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
         batters = [b for b in all_statcast if b.get('role') == 'BATTER' and b.get('team') == team]
         batters.sort(key=lambda x: x.get('lineup_pos', 99))
 
-        # Upgrade #4: Stack check — 3+ batters B+ or better vs same pitcher
+        # Upgrade #4: Stack check  -  3+ batters B+ or better vs same pitcher
         team_scores = []
         for b in batters:
             sc, _, _, _ = compute_batter_score(b)
@@ -1090,7 +1114,7 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
             team_scores.append((sc, pl))
         b_plus_count = sum(1 for sc, pl in team_scores
                           if (sc >= 3 and pl == 'FAV') or (sc >= 3.5 and pl == 'SAME'))
-        stack_flag = f'  ⚡ STACK GAME — {b_plus_count} B+ batters vs {opp_pitcher} (widen net)' if b_plus_count >= 3 else ''
+        stack_flag = f'  ⚡ STACK GAME  -  {b_plus_count} B+ batters vs {opp_pitcher} (widen net)' if b_plus_count >= 3 else ''
         if stack_flag:
             lines.append(stack_flag)
 
@@ -1108,22 +1132,22 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
                 elif score == 2:  grade = 'B+'
                 elif score == 1:  grade = 'B'
                 else:             grade = 'C'
-            else:  # SAME side — drops half grade
+            else:  # SAME side  -  drops half grade
                 if score == 4:    grade = 'A-'
                 elif score == 3:  grade = 'B+'
                 elif score == 2:  grade = 'B'
                 else:             grade = 'C'
 
-            # Upgrade #11: 4/4 + 1-5 + fav platoon → flag C Dart
+            # Upgrade #11: 4/4 + 1-5 + fav platoon -> flag C Dart
             u11 = ''
             if score == 4 and b.get('lineup_pos',99) <= 5 and platoon in ('FAV','FAV(SW)'):
-                u11 = ' [#11:4/4-FAV-1-5→C-DART]'
+                u11 = ' [#11:4/4-FAV-1-5->C-DART]'
 
             # Upgrade #12: Barrel>=20% + booster park + fav platoon
             u12 = ''
             brl = b.get('barrel_pct') or 0
             if brl >= 20 and park_cat == 'BOOSTER' and platoon in ('FAV','FAV(SW)'):
-                u12 = ' [#12:ELITE-BARREL+BOOSTER→B-DART]'
+                u12 = ' [#12:ELITE-BARREL+BOOSTER->B-DART]'
 
             # Upgrade #14 already in breakdown string if applicable
             lines.append(
@@ -1145,7 +1169,7 @@ def run_job(jid, sid, raw_lineup, game_date=None):
     try:
         # STEP 1: Parse lineup
         step_set(jid, 0, 'active', 'Parsing lineup...')
-        # NOTE: Do NOT clear cache here — cache is managed by _daily_refresh_loop
+        # NOTE: Do NOT clear cache here  -  cache is managed by _daily_refresh_loop
         # Clearing on every run causes partial data when downloads are in progress
         parsed = parse_lineup(raw_lineup, game_date)
         home = parsed.get('home_team', '?')
@@ -1398,7 +1422,7 @@ function poll(){
     updateSteps(d.steps||[]);
     if(d.park_confirm&&Object.keys(d.park_confirm).length) showInfo(d.park_confirm,d.bullpen||{});
 
-    // Fetch statcast separately when ready — small focused request
+    // Fetch statcast separately when ready  -  small focused request
     if(d.has_statcast){
       fetch('/api/statcast?jid='+curJid+'&t='+Date.now())
       .then(r=>r.json())
@@ -1426,7 +1450,7 @@ function poll(){
         return;
       }
 
-      // Fetch result separately — can be large, isolated request
+      // Fetch result separately  -  can be large, isolated request
       fetch('/api/result?jid='+curJid+'&t='+Date.now())
       .then(r=>r.json())
       .then(res=>{
@@ -1449,7 +1473,7 @@ function poll(){
     if(pollErrors>5){
       clearInterval(pollTimer);
       document.getElementById('runBtn').disabled=false;
-      document.getElementById('result').textContent='Connection error — try again';
+      document.getElementById('result').textContent='Connection error  -  try again';
     }
   });
 }
@@ -1561,7 +1585,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with store_lock:
                 job = jobs[jid]
-                # Send lightweight poll — no statcast, no result text (those are fetched separately)
+                # Send lightweight poll  -  no statcast, no result text (those are fetched separately)
                 snap = {
                     'status':       job['status'],
                     'steps':        job['steps'],
