@@ -578,6 +578,12 @@ def fetch_all_parallel(players, workers=12, cache=None):
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
         results = list(ex.map(fetch, players))
     ok = sum(1 for r in results if r.get('fetch_status') == 'ok')
+    # Log misses so we can see which names aren't matching
+    for r in results:
+        if r.get('fetch_status') != 'ok':
+            name = r.get('name','?')
+            key = normalize_name(name).lower()
+            print(f"[MISS] {name} | key={key} | status={r.get('fetch_status')}")
     print(f"[FETCH] Done: {ok}/{len(results)} ok")
     return results
 
