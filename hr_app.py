@@ -245,16 +245,17 @@ def _download_csvs():
             print(f"[CSV DOWNLOAD] {filename}  -  ERROR: {e}")
 
 def _daily_refresh_loop():
-    """Background thread: refresh CSVs once at startup, then daily at midnight ET."""
+    """Background thread: refresh CSVs once at startup, then daily at 11am ET."""
+    global _stats_cache, _stats_loaded, _stats_loading
     import datetime
-    # Initial download at startup
     print("[CSV REFRESH] Initial download starting...")
     _download_csvs()
-    print("[CSV REFRESH] Initial download complete")
-    # Then reset cache and re-download at midnight every day
+    print("[CSV REFRESH] Initial download complete — loading cache...")
+    load_stats_cache()
+    print(f"[CSV REFRESH] Cache ready: {len(_stats_cache)} players")
+
     while True:
         now = datetime.datetime.utcnow()
-        # Midnight UTC = 8pm ET / 7pm CT  -  good time for next-day data
         tomorrow = (now + datetime.timedelta(days=1)).replace(
             hour=15, minute=0, second=0, microsecond=0)  # 11am ET = 15:00 UTC
         sleep_secs = (tomorrow - now).total_seconds()
@@ -262,13 +263,12 @@ def _daily_refresh_loop():
         time.sleep(max(sleep_secs, 3600))
         print("[CSV REFRESH] Daily refresh starting...")
         _download_csvs()
-        # Reset cache so next run picks up fresh data
         with _stats_lock:
-            global _stats_cache, _stats_loaded, _stats_loading
             _stats_cache = {}
             _stats_loaded = False
             _stats_loading = False
-        print("[CSV REFRESH] Daily refresh complete  -  cache cleared")
+        load_stats_cache()
+        print(f"[CSV REFRESH] Cache refreshed: {len(_stats_cache)} players")
 
 def load_stats_cache():
     """
@@ -1232,17 +1232,10 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         step_set(jid, 2, 'active', 'Fetching Statcast...')
 
         # Wait until CSV download and cache load is fully complete
-        # The background thread downloads CSVs at startup — if a run starts
-        # before download finishes, we wait here rather than get partial data
-        waited = 0
-        while not _stats_loaded and waited < 60:
-            time.sleep(0.5)
-            waited += 0.5
-            if int(waited) % 5 == 0 and waited == int(waited):
-                print(f"[STATS] Waiting for cache to load... {int(waited)}s elapsed")
-
+        # load_stats_cache() blocks until cache is fully ready
+        # The background thread loads it at startup — just call and it returns when ready
         cache = load_stats_cache()
-        print(f"[STATS] Cache ready: {len(cache)} players (waited {waited:.1f}s)")
+        print(f"[STATS] Cache ready: {len(cache)} players")
 
         hp = parsed.get('home_pitcher', {})
         ap = parsed.get('away_pitcher', {})
