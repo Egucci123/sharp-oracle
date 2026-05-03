@@ -286,10 +286,13 @@ def load_stats_cache():
     # Need to load — claim or wait
     i_claimed = False
     with _stats_lock:
+        if _stats_loaded:
+            return _stats_cache  # check again inside lock
         if not _stats_loading:
             _stats_loading = True
-            _stats_cache = {}
             i_claimed = True
+            # Only clear cache AFTER claiming, right before loading
+            _stats_cache = {}
 
     if not i_claimed:
         # Another thread is loading — wait for it
@@ -569,10 +572,14 @@ def fetch_all_parallel(players, workers=12, cache=None):
     """Fetch all players in parallel. Cache loaded once and shared across all workers."""
     if cache is None:
         cache = load_stats_cache()
+    print(f"[FETCH] {len(players)} players, cache={len(cache)}, workers={workers}")
     import functools
     fetch = functools.partial(fetch_one_player, cache=cache)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-        return list(ex.map(fetch, players))
+        results = list(ex.map(fetch, players))
+    ok = sum(1 for r in results if r.get('fetch_status') == 'ok')
+    print(f"[FETCH] Done: {ok}/{len(results)} ok")
+    return results
 
 # ─── WEATHER ─────────────────────────────────────────────────────────────────
 PARK_COORDS = {
@@ -1224,9 +1231,18 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         # STEP 3: Statcast fetch
         step_set(jid, 2, 'active', 'Fetching Statcast...')
 
-        # Block until cache is fully loaded, then get it
+        # Wait until CSV download and cache load is fully complete
+        # The background thread downloads CSVs at startup — if a run starts
+        # before download finishes, we wait here rather than get partial data
+        waited = 0
+        while not _stats_loaded and waited < 60:
+            time.sleep(0.5)
+            waited += 0.5
+            if int(waited) % 5 == 0 and waited == int(waited):
+                print(f"[STATS] Waiting for cache to load... {int(waited)}s elapsed")
+
         cache = load_stats_cache()
-        print(f"[STATS] Cache: {len(cache)} players — pitchers={sum(1 for k,v in cache.items() if v.get('player_type')=='pitcher')} batters={sum(1 for k,v in cache.items() if v.get('player_type')!='pitcher')}")
+        print(f"[STATS] Cache ready: {len(cache)} players (waited {waited:.1f}s)")
 
         hp = parsed.get('home_pitcher', {})
         ap = parsed.get('away_pitcher', {})
