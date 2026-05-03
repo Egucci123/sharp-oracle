@@ -87,30 +87,31 @@ SYSTEM_PROMPT = (
     "  * FB/LD EV>=96 + fav platoon + OPEN gate = elite fly ball contact mispriced\n"
     "  * xwOBA>=.380 + wOBA<.310 = extreme cold gap, massive regression candidate\n"
     "  * 0/4 or 1/4 score BUT EV50>=104 = raw power tool that thresholds miss\n"
-    "  If a batter hits 2+ sleeper signals, they belong in TOP 5 HR even over higher-graded chalk.\n\n"
+    "  If a batter hits 2+ sleeper signals, they belong in HR picks even over higher-graded chalk.\n\n"
+    "DOUBLE SCRUTINY — before finalizing ANY pick, run this checklist:\n"
+    "  HR picks: Does the pitcher gate allow it? Is platoon favorable? Is GAP not HOT-EXTREME? "
+    "Is weather not a hard suppressor killing carry? Is park not a double suppressor? "
+    "If any of these kill it — DROP the pick and find a better one.\n"
+    "  HIT picks: Is wOBA>=.300? Is EV>=85 (can they make contact)? Is platoon not a disaster? "
+    "HOT gap = yes. COLD gap + high xwOBA = yes. If they pass — keep it.\n"
+    "  Only 2 picks each. Make them COUNT. Zero chalk. Find the real edge.\n\n"
     "DATA RULES: Use ONLY pre-computed scores and flags in the context. "
     "GAP positive = COLD (buy regression). GAP negative = HOT (fade HR, hits still fine). "
     "[PROXY] = no 2026 data, max B grade.\n\n"
     "OUTPUT: Write your full sharp analysis — batter grades, upgrades, park/weather layer, "
-    "angles the market is missing. Then ALWAYS end with BOTH sections below, no exceptions.\n\n"
-    "Even if the slate is cold and HR edges are weak, you MUST give 5 HR picks. "
-    "Gun-to-head: rank them best to worst and pick. Note confidence level if slate is weak.\n\n"
+    "angles the market is missing. Apply double scrutiny to every candidate. "
+    "Then ALWAYS end with BOTH sections below, no exceptions.\n\n"
     "══════════════════════════════════════\n"
-    "TOP 5 HR BETS:\n"
-    "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences — if sleeper, start with 🔥 SLEEPER: and name the signals]\n"
-    "2. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
-    "3. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
-    "4. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
-    "5. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n\n"
-    "TOP 5 HIT BETS:\n"
+    "TOP 2 HR BETS:\n"
+    "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences — if sleeper start with 🔥 SLEEPER:]\n"
+    "2. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n\n"
+    "TOP 2 HIT BETS:\n"
     "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
     "2. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
-    "3. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
-    "4. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
-    "5. [Name] ([Team]) | Grade: [X] | [odds] | [2 sharp sentences]\n"
     "══════════════════════════════════════\n\n"
-    "Sleeper picks: start the sentence with '🔥 SLEEPER:' and name exactly which signals fired.\n"
-    "These two sections MUST always appear at the end. Always 5 HR picks and 5 hit picks. Always.\n\n"
+    "Only 2 HR picks and 2 hit picks. These are your BEST edges only. "
+    "If you cannot find 2 real HR edges after double scrutiny, say so and give 1 or 0. "
+    "Never force a bad pick. Quality over quantity.\n\n"
     + LOCKED_RULES
 )
 
@@ -1154,10 +1155,20 @@ def run_job(jid, sid, raw_lineup, game_date=None):
               f"away_pitcher={parsed.get('away_pitcher',{}).get('name','?')} faces {home}")
         step_set(jid, 0, 'done', f'{away} @ {home}')
 
-        # STEP 2: Park + weather
-        step_set(jid, 1, 'active', 'Fetching park and weather...')
+        # STEP 2: Park + weather + bullpen ERA (fast context first)
+        step_set(jid, 1, 'active', 'Fetching park, weather & bullpen...')
         park_name, park_cat = resolve_park(home)
         weather = fetch_weather(park_name)
+
+        # Fetch bullpen ERA in parallel with weather
+        pen_era = {}
+        for team in [home, away]:
+            if team and team != '?':
+                data = fetch_bullpen_era(team)
+                pen_era[team] = data
+                era_str = f"{data['era']:.2f}" if data.get('era') else 'N/A'
+                print(f"[PEN ERA] {team}: ERA={era_str} [{data['tier']}]")
+
         with store_lock:
             jobs[jid]['park_confirm'] = {
                 'park': park_name, 'category': park_cat,
@@ -1165,14 +1176,16 @@ def run_job(jid, sid, raw_lineup, game_date=None):
                 'wind_mph': weather['wind_mph'], 'weather_flag': weather['flag'],
                 'notes': weather.get('notes', ''),
             }
-        temp_str = f"{weather['temp_f']}F" if weather['temp_f'] else 'N/A'
-        step_set(jid, 1, 'done', f'{park_name} [{park_cat}] | {temp_str} {weather["condition"]} | {weather["flag"]}')
+            jobs[jid]['bullpen'] = pen_era
 
-        # STEP 3: Build player lists with correct team/pitcher assignment
+        temp_str = f"{weather['temp_f']}F" if weather['temp_f'] else 'N/A'
+        pen_summary = ' | '.join(f"{t}={d.get('era','N/A')}" for t,d in pen_era.items())
+        step_set(jid, 1, 'done', f'{park_name} | {temp_str} {weather["flag"]} | Pen: {pen_summary}')
+
+        # STEP 3: Statcast fetch
         step_set(jid, 2, 'active', 'Fetching Statcast...')
 
         # Wait for CSV cache to be fully loaded (max 30s)
-        # This prevents partial data on mobile when cache is still loading
         waited = 0
         while not _stats_loaded and waited < 30:
             time.sleep(1)
@@ -1194,16 +1207,13 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         for b in parsed.get('away_batters', []):
             batter_list.append({**b, 'role': 'BATTER', 'team': away})
 
-        # Fetch stats
         pitcher_stats = fetch_all_parallel(pitcher_list, workers=2)
         batter_stats  = fetch_all_parallel(batter_list, workers=12)
         all_statcast  = pitcher_stats + batter_stats
 
         ok = sum(1 for x in all_statcast if x.get('fetch_status') == 'ok')
-        cache_hits = sum(1 for x in all_statcast if 'leaderboard' in str(x.get('data_source','')))
-        print(f"[STATS] {ok}/{len(all_statcast)} ok | {cache_hits} from leaderboard")
+        print(f"[STATS] {ok}/{len(all_statcast)} ok")
 
-        # Only store the fields the UI needs — keeps payload small for mobile
         slim_statcast = []
         for p in all_statcast:
             slim_statcast.append({
@@ -1220,25 +1230,15 @@ def run_job(jid, sid, raw_lineup, game_date=None):
                 'sweet_spot_pct': p.get('sweet_spot_pct'),
                 'fetch_status':   p.get('fetch_status'),
             })
-        # Don't write to job yet — hold until analysis completes
+
+        # Write statcast immediately so UI can show it while analysis runs
+        with store_lock:
+            jobs[jid]['statcast'] = slim_statcast
+            jobs[jid]['statcast_total'] = len(slim_statcast)
         step_set(jid, 2, 'done', f'Stats: {ok}/{len(all_statcast)} fetched')
 
-        # STEP 4: Bullpen ERA
-        step_set(jid, 3, 'active', 'Fetching bullpen ERA...')
-        pen_era = {}
-        for team in [home, away]:
-            if team and team != '?':
-                data = fetch_bullpen_era(team)
-                pen_era[team] = data
-                era_str = f"{data['era']:.2f}" if data.get('era') else 'N/A'
-                print(f"[PEN ERA] {team}: ERA={era_str} [{data['tier']}]")
-        with store_lock:
-            jobs[jid]['bullpen'] = pen_era
-        pen_summary = ' | '.join(f"{t}={d.get('era','N/A')}" for t,d in pen_era.items())
-        step_set(jid, 3, 'done', f"Pen ERA: {pen_summary}")
-
-        # STEP 5: Analysis
-        step_set(jid, 4, 'active', 'Running model analysis...')
+        # STEP 4: Analysis (runs in background, statcast already visible)
+        step_set(jid, 3, 'active', 'Running model analysis...')
         ctx = build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era)
         analysis = call_claude(
             [{'role': 'user', 'content': ctx}],
@@ -1247,10 +1247,8 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         )
         with store_lock:
             jobs[jid]['result'] = analysis
-            jobs[jid]['statcast'] = slim_statcast
-            jobs[jid]['statcast_total'] = len(slim_statcast)
             jobs[jid]['status'] = 'done'
-        step_set(jid, 4, 'done', 'Analysis complete')
+        step_set(jid, 3, 'done', 'Analysis complete')
 
     except Exception as e:
         tb = traceback.format_exc()
@@ -1359,7 +1357,8 @@ tr.pitcher-row td{background:#06090f}
 </div>
 
 <script>
-let pollTimer=null,curJid=null;
+let pollTimer=null, curJid=null, pollErrors=0;
+
 fetch('/api/status').then(r=>r.json()).then(d=>{
   const n=d.cache_players||0;
   document.getElementById('cacheStatus').innerHTML=n>100?`<span style="color:#22c55e">${n} players</span>`:`<span style="color:#f97316">loading...</span>`;
@@ -1379,28 +1378,80 @@ function runModel(){
   document.getElementById('result').textContent='Analyzing...';
   document.getElementById('stepsCard').style.display='';
   document.getElementById('infoCard').style.display='none';
+  pollErrors=0;
   show('analyze',document.querySelector('.nav-btn'));
   fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lineup:txt})})
-  .then(r=>r.json()).then(d=>{curJid=d.jid;pollTimer=setInterval(poll,1500)})
-  .catch(e=>{document.getElementById('runBtn').disabled=false;alert('Error: '+e)});
+  .then(r=>r.json())
+  .then(d=>{curJid=d.jid; pollTimer=setInterval(poll,2000);})
+  .catch(e=>{document.getElementById('runBtn').disabled=false; alert('Error: '+e);});
 }
 
 function poll(){
   if(!curJid)return;
-  fetch('/api/poll?jid='+curJid+'&t='+Date.now()).then(r=>r.json()).then(d=>{
+  fetch('/api/poll?jid='+curJid+'&t='+Date.now())
+  .then(r=>{
+    if(!r.ok) throw new Error('poll '+r.status);
+    return r.json();
+  })
+  .then(d=>{
+    pollErrors=0;
     updateSteps(d.steps||[]);
-    if(d.park_confirm&&Object.keys(d.park_confirm).length)showInfo(d.park_confirm,d.bullpen||{});
-    if(d.statcast&&d.statcast.length>0) showStats(d.statcast);
+    if(d.park_confirm&&Object.keys(d.park_confirm).length) showInfo(d.park_confirm,d.bullpen||{});
+
+    // Fetch statcast separately when ready — small focused request
+    if(d.has_statcast){
+      fetch('/api/statcast?jid='+curJid+'&t='+Date.now())
+      .then(r=>r.json())
+      .then(s=>{
+        if(s.statcast&&s.statcast.length>0){
+          showStats(s.statcast);
+          // Auto-switch to statcast tab when data arrives
+          // but only if still on analyze tab (not if user manually switched)
+          const active=document.querySelector('.panel.active');
+          if(active&&active.id==='panel-analyze'){
+            show('stats',document.querySelectorAll('.nav-btn')[1]);
+          }
+        }
+      })
+      .catch(()=>{});
+    }
+
     if(d.status==='done'||d.status==='error'){
       clearInterval(pollTimer);
-      document.getElementById('result').textContent=d.status==='done'?(d.result||''):'Error: '+(d.error||'');
       document.getElementById('runBtn').disabled=false;
-      show('picks',document.querySelectorAll('.nav-btn')[2]);
+
+      if(d.status==='error'){
+        document.getElementById('result').textContent='Error: '+(d.error||'unknown');
+        show('picks',document.querySelectorAll('.nav-btn')[2]);
+        return;
+      }
+
+      // Fetch result separately — can be large, isolated request
+      fetch('/api/result?jid='+curJid+'&t='+Date.now())
+      .then(r=>r.json())
+      .then(res=>{
+        document.getElementById('result').textContent=res.result||'No result';
+        show('picks',document.querySelectorAll('.nav-btn')[2]);
+      })
+      .catch(()=>{
+        document.getElementById('result').textContent='Error loading result';
+        show('picks',document.querySelectorAll('.nav-btn')[2]);
+      });
+
       fetch('/api/status').then(r=>r.json()).then(s=>{
         document.getElementById('cacheStatus').innerHTML=`<span style="color:#22c55e">${s.cache_players||0} players</span>`;
       });
     }
-  }).catch(()=>{});
+  })
+  .catch(()=>{
+    pollErrors++;
+    // Retry up to 5 times before giving up
+    if(pollErrors>5){
+      clearInterval(pollTimer);
+      document.getElementById('runBtn').disabled=false;
+      document.getElementById('result').textContent='Connection error — try again';
+    }
+  });
 }
 
 function updateSteps(steps){
@@ -1509,8 +1560,36 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({'error': 'not found'}, 404)
                 return
             with store_lock:
-                snap = dict(jobs[jid])
+                job = jobs[jid]
+                # Send lightweight poll — no statcast, no result text (those are fetched separately)
+                snap = {
+                    'status':       job['status'],
+                    'steps':        job['steps'],
+                    'park_confirm': job['park_confirm'],
+                    'bullpen':      job['bullpen'],
+                    'error':        job['error'],
+                    'has_statcast': len(job.get('statcast', [])) > 0,
+                    'has_result':   bool(job.get('result')),
+                }
             self._json(snap)
+
+        elif path == '/api/statcast':
+            qs = parse_qs(urlparse(self.path).query)
+            jid = qs.get('jid', [None])[0]
+            if not jid or jid not in jobs:
+                self._json({'error': 'not found'}, 404)
+                return
+            with store_lock:
+                self._json({'statcast': jobs[jid].get('statcast', [])})
+
+        elif path == '/api/result':
+            qs = parse_qs(urlparse(self.path).query)
+            jid = qs.get('jid', [None])[0]
+            if not jid or jid not in jobs:
+                self._json({'error': 'not found'}, 404)
+                return
+            with store_lock:
+                self._json({'result': jobs[jid].get('result', '')})
         elif path == '/api/debug':
             qs = parse_qs(urlparse(self.path).query)
             name = qs.get('name', ['Elly De La Cruz'])[0]
