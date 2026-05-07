@@ -36,21 +36,23 @@ _HEADERS = {
 # ─── MODEL RULES ──────────────────────────────────────────────────────────────
 LOCKED_RULES = """
 PITCHER GATE (contact allowed, 0-4 pts):
-  EV>=93 | HH%>=50 | xwOBA>=.350 | Barrel%>=15 = 1pt each
+  EV>=91 | HH%>=50 | xwOBA>=.350 | Barrel%>=12 = 1pt each
+  (calibrated to real 2026: EV 91=top-25%, Barrel 12=top-10%)
   0-1=OPEN | 2=HALF | 3-4=CLOSED
-  GB-EV<=82=soft-grounders(closes gate half step) | GB-EV>=91=hard-grounders(danger hidden in gate)
-  Pitcher EV50<=80=ELITE-soft-contact | EV50>=88=batters-squaring-up-danger
+  GB-EV<=81=ELITE-soft-grounders(closes gate half step, bot-10%)
+  GB-EV>=90=HARD-grounders-danger(gate understates risk, top-10%)
+  Pitcher EV50: <=74=ELITE(top-10%) | <=77=PLUS(top-25%) | <=80=avg | >=84=below-avg | >=87=DANGER
 
 BATTER GRADE (0-4 pts):
   Barrel%>=15 | xwOBA>=.350 | EV>=91 | HH%>=50 = 1pt each
   A=4/4+fav | A-=4/4+same OR 3/4+fav | B+=2/4+fav | B=dart | C=override only
 
-CONTACT METRICS (all from statcast CSV):
-  EV50>=103=ELITE power tier | EV50>=100=PLUS | EV50<95=weak contact
-  Sweet Spot%>=38=elite launch angle | SS%>=32=good LA
-  FB/LD EV>=95=elite fly ball contact | FB/LD EV<88=weak fly ball
-  Avg HR Dist>=410=elite carry | Avg HR Dist<380=weak carry
-  Barrel/PA%>=10=elite true power rate
+CONTACT METRICS (all from statcast CSV, calibrated to real 2026 distributions):
+  EV50>=103=ELITE(top-10%) | EV50>=100=PLUS(top-50%) | EV50<97=WEAK(bot-25%)
+  Sweet Spot%>=38=ELITE-LA(top-25%) | SS%>=32=GOOD-LA(top-40%)
+  FB/LD EV>=96=ELITE(top-12%) | FB/LD EV>=94=GOOD(top-25%) | FB/LD EV<90=WEAK(bot-10%)
+  Avg HR Dist>=410=ELITE-carry(top-10%) | HR Dist<380=weak-carry(bot-15%)
+  Barrel/PA%>=10=ELITE true power rate(top-10%)
   GB-EV = pitcher soft contact signal (lower = softer grounders = real suppressor)
 
 PLATOON: LHB vs RHP=fav | RHB vs LHP=fav | Switch=fav | Same-side=drops half grade
@@ -130,7 +132,7 @@ SYSTEM_PROMPT = (
     "  * SS%>=40 + HR dist>=410 = elite HR profile buried under other metrics\n"
     "  * Barrel/PA>=10 + high-K batter = true power understated by Barrel/BBE\n"
     "  * COLD gap>=+.100 + lineup spots 6-9 = market completely ignores him\n"
-    "  * Pitcher EV50>=86 + elite power batter = pitcher softer than GB% suggests\n"
+    "  * Pitcher EV50>=83 + elite power batter (EV50>=103) = hard contact danger, gate undersells HR risk\n"
     "  * HOT gap + wOBA>=.380 = genuine elite hitter, hit props are real value\n"
     "  * Weak pen ERA>=5.50 + Barrel/PA>=8 + spots 6-9 = late inning power mispriced\n"
     "  * GB%<=40 pitcher + EV50>=103 batter + fav platoon = fly ball danger, gate misleading\n"
@@ -962,11 +964,14 @@ def compute_pitcher_gate(p):
     csw  = p.get('csw_pct')
     fbld = p.get('fbld_ev')
 
+    # Thresholds calibrated to real 2026 distributions
+    # EV>=91 = top 25% pitchers (old 93 was top 5% - almost never fired)
+    # Barrel>=12 = top 10% pitchers (old 15 was top 5% - almost never fired)
     score = sum([
-        1 if (ev  is not None and ev  >= 93.0) else 0,
+        1 if (ev  is not None and ev  >= 91.0) else 0,
         1 if (hh  is not None and hh  >= 50.0) else 0,
         1 if (xw  is not None and xw  >= 0.350) else 0,
-        1 if (brl is not None and brl >= 15.0) else 0,
+        1 if (brl is not None and brl >= 12.0) else 0,
     ])
     gate = 'OPEN' if score <= 1 else 'HALF' if score == 2 else 'CLOSED'
 
@@ -974,16 +979,16 @@ def compute_pitcher_gate(p):
     # High GB EV means batters squaring up but hitting down — one mistake elevated = gone
     gb_flag = ''
     if gb_ev is not None:
-        if gb_ev <= 82:
-            gb_flag = f' GB-EV={gb_ev}(ELITE-soft-grounders->suppressor)'
+        if gb_ev <= 81:
+            gb_flag = f' GB-EV={gb_ev}(ELITE-soft-grounders->suppressor,bot-10%)'
             if gate == 'OPEN': gate = 'OPEN->HALF'
             elif gate == 'HALF': gate = 'HALF->CLOSED'
-        elif gb_ev <= 86:
-            gb_flag = f' GB-EV={gb_ev}(soft-contact)'
-        elif gb_ev >= 91:
-            gb_flag = f' GB-EV={gb_ev}(HARD-grounders->mistake-pitch-danger)'
+        elif gb_ev <= 85:
+            gb_flag = f' GB-EV={gb_ev}(soft-contact,bot-25%)'
+        elif gb_ev >= 90:
+            gb_flag = f' GB-EV={gb_ev}(HARD-grounders->mistake-pitch-danger,top-10%)'
         else:
-            gb_flag = f' GB-EV={gb_ev}'
+            gb_flag = f' GB-EV={gb_ev}(neutral)'
 
     # CSW% modifier
     csw_flag = ''
@@ -992,23 +997,26 @@ def compute_pitcher_gate(p):
         elif csw < 25:  csw_flag = f' CSW%={csw}(hittable)'
 
     # EV50 - for pitchers, LOWER ev50 = better (softer contact allowed)
+    # Real distribution: Min=65, P10=73.8, P25=76.1, Median=78.4, P75=80.4, P90=82.2, Max=86.5
     ev50_flag = ''
     if ev50 is not None:
-        if ev50 >= 88:    ev50_flag = f' EV50={ev50}(DANGER-batters-squaring-up)'
-        elif ev50 <= 80:  ev50_flag = f' EV50={ev50}(ELITE-soft-contact)'
-        else:             ev50_flag = f' EV50={ev50}'
+        if ev50 <= 74:    ev50_flag = f' EV50={ev50}(ELITE-soft-contact,top-10%)'
+        elif ev50 <= 77:  ev50_flag = f' EV50={ev50}(PLUS-soft-contact,top-25%)'
+        elif ev50 <= 80:  ev50_flag = f' EV50={ev50}(avg-soft-contact)'
+        elif ev50 <= 83:  ev50_flag = f' EV50={ev50}(below-avg,batters-making-contact)'
+        else:             ev50_flag = f' EV50={ev50}(DANGER-hard-contact,bottom-10%)'
 
     # FB/LD EV for pitchers - lower = better
     fbld_flag = ''
     if fbld is not None:
-        if fbld >= 95:   fbld_flag = f' FB/LD={fbld}(HARD-fly-balls->HR-risk)'
-        elif fbld <= 88: fbld_flag = f' FB/LD={fbld}(SOFT-fly-balls->suppressor)'
+        if fbld >= 95:   fbld_flag = f' FB/LD={fbld}(HARD-fly-balls->HR-risk,top-12%)'
+        elif fbld <= 90: fbld_flag = f' FB/LD={fbld}(SOFT-fly-balls->suppressor,bottom-10%)'
 
     pts = [
-        f"EV={ev or 'N/A'}{'✓' if ev and ev>=93 else '✗'}",
+        f"EV={ev or 'N/A'}{'✓' if ev and ev>=91 else '✗'}",
         f"HH%={hh or 'N/A'}{'✓' if hh and hh>=50 else '✗'}",
         f"xwOBA={xw or 'N/A'}{'✓' if xw and xw>=0.350 else '✗'}",
-        f"Brl%={brl or 'N/A'}{'✓' if brl and brl>=15 else '✗'}",
+        f"Brl%={brl or 'N/A'}{'✓' if brl and brl>=12 else '✗'}",
     ]
     return score, gate, ' | '.join(pts) + gb_flag + csw_flag + ev50_flag + fbld_flag
 
@@ -1056,7 +1064,7 @@ def compute_batter_score(b):
     if ev50 is not None:
         if ev50 >= 103:   ev50_flag = f' EV50={ev50}(ELITE)'
         elif ev50 >= 100: ev50_flag = f' EV50={ev50}(PLUS)'
-        elif ev50 < 95:   ev50_flag = f' EV50={ev50}(WEAK)'
+        elif ev50 < 97:   ev50_flag = f' EV50={ev50}(WEAK,bot-25%)'
         else:             ev50_flag = f' EV50={ev50}'
 
     # Sweet spot flag
@@ -1069,8 +1077,9 @@ def compute_batter_score(b):
     # FB/LD EV flag  -  contact quality on actual fly balls
     fbld_flag = ''
     if fbld is not None:
-        if fbld >= 95:   fbld_flag = f' FB/LD-EV={fbld}(ELITE)'
-        elif fbld < 88:  fbld_flag = f' FB/LD-EV={fbld}(WEAK)'
+        if fbld >= 96:   fbld_flag = f' FB/LD-EV={fbld}(ELITE,top-12%)'
+        elif fbld >= 94: fbld_flag = f' FB/LD-EV={fbld}(GOOD,top-25%)'
+        elif fbld < 90:  fbld_flag = f' FB/LD-EV={fbld}(WEAK,bottom-10%)'
 
     # HR distance flag
     hrd_flag = ''
