@@ -38,19 +38,20 @@ LOCKED_RULES = """
 PITCHER GATE (contact allowed, 0-4 pts):
   EV>=93 | HH%>=50 | xwOBA>=.350 | Barrel%>=15 = 1pt each
   0-1=OPEN | 2=HALF | 3-4=CLOSED
-  GB%>=55=ELITE-SUPPRESSOR(closes gate half step) | CSW%>=30=ELITE-MISS suppressor
+  GB-EV<=82=soft-grounders(closes gate half step) | GB-EV>=91=hard-grounders(danger hidden in gate)
+  Pitcher EV50<=80=ELITE-soft-contact | EV50>=88=batters-squaring-up-danger
 
 BATTER GRADE (0-4 pts):
   Barrel%>=15 | xwOBA>=.350 | EV>=91 | HH%>=50 = 1pt each
   A=4/4+fav | A-=4/4+same OR 3/4+fav | B+=2/4+fav | B=dart | C=override only
 
-NEW CONTACT METRICS (use in analysis):
+CONTACT METRICS (all from statcast CSV):
   EV50>=103=ELITE power tier | EV50>=100=PLUS | EV50<95=weak contact
-  Sweet Spot%>=38=elite launch angle profile (HR zone consistently)
+  Sweet Spot%>=38=elite launch angle | SS%>=32=good LA
   FB/LD EV>=95=elite fly ball contact | FB/LD EV<88=weak fly ball
   Avg HR Dist>=410=elite carry | Avg HR Dist<380=weak carry
-  Barrel/PA%>=10=elite true power rate (more stable than Barrel/BBE)
-  GB EV = pitcher suppressor signal: high GB EV = harder to suppress
+  Barrel/PA%>=10=elite true power rate
+  GB-EV = pitcher soft contact signal (lower = softer grounders = real suppressor)
 
 PLATOON: LHB vs RHP=fav | RHB vs LHP=fav | Switch=fav | Same-side=drops half grade
 GAP: xwOBA-wOBA. Positive=COLD(buy). Negative=HOT(fade for HR, good for hits).
@@ -58,7 +59,7 @@ PARKS: BOOSTER=Yankee/GABP/CBP/Coors/Sutter | SUPPRESSOR=Comerica/Petco/Oracle/T
 DOMES(no weather): AmFam/Tropicana/Globe Life/Chase Field
 WEATHER: >=85F=boost | <=50F=suppress | <=45F=hard suppress
 
-#1 Bullpen: pen ERA>=5.50 or 3+IL -> Barrel>=15+xwOBA>=.350 = Bullpen Tier
+#1 Bullpen: pen ERA>=5.50 -> Barrel>=15+xwOBA>=.350 = Bullpen Tier
 #2 Regression Gap: xwOBA>=.420+gap>=+.100 -> HH% drops to 45%
 #3 Elite Barrel: 4/4+Barrel>=25%+positive gap -> pitcher cold flag half step
 #4 Stack: 3+ same-team B+ vs same pitcher -> widen net
@@ -97,12 +98,15 @@ SYSTEM_PROMPT = (
     "Barrel/PA>=10 on a high-K batter = true elite power the market undervalues.\n\n"
 
     "PITCHER READS:\n"
-    "  GB%>=55: Double suppressor. Downgrade all batters half step. "
-    "Only EV50>=104 + HR dist>=410 survive.\n"
-    "  GB%<=40 (fly ball pitcher): Even CLOSED gate, elite power batters get a half-step upgrade. "
-    "Fly ball pitchers live and die by the HR.\n"
-    "  Pitcher EV50<=78: Genuine soft contact, suppressor confirmed. "
-    "Pitcher EV50>=88: Batters are squaring him up but hitting it down — one mistake = gone.\n"
+    "  GB-EV<=82: Elite soft grounders — real suppressor, gate closes half step. "
+    "Batters hitting it weakly even on the ground.\n"
+    "  GB-EV>=91: Batters squaring him up but hitting it down. One elevated pitch = gone. "
+    "Gate score may be misleading — more dangerous than it looks.\n"
+    "  GB-EV 83-90: Neutral, use other signals.\n"
+    "  FB/LD EV>=95: Hard fly balls allowed — HR risk is real when batters elevate.\n"
+    "  FB/LD EV<=88: Soft fly balls — suppressor on elevated contact.\n"
+    "  Pitcher EV50<=80: Genuine soft contact, suppressor confirmed.\n"
+    "  Pitcher EV50>=88: Batters squaring him up — gate may understate danger.\n"
     "  CSW%>=30: Contact suppressed for everyone. Hit props fade across the board.\n\n"
 
     "GAP QUALITY — not all gaps are equal:\n"
@@ -548,11 +552,21 @@ def fetch_one_player(info, cache=None):
     row = get_cached_stats(name, cache=cache)
     if row:
         def g(row, *keys):
+            """Returns first positive non-null value. Use for EV, HH% etc where 0 means missing."""
             for k in keys:
                 v = row.get(k)
-                if v not in (None, '', 'null', 'None', 'NaN', 'null'):
+                if v not in (None, '', 'null', 'None', 'NaN'):
                     f = safe_float(v)
                     if f is not None and f > 0:
+                        return f
+            return None
+        def gz(row, *keys):
+            """Returns first non-null value including zero. Use for barrel% where 0 is valid."""
+            for k in keys:
+                v = row.get(k)
+                if v not in (None, '', 'null', 'None', 'NaN'):
+                    f = safe_float(v)
+                    if f is not None:
                         return f
             return None
         # Cover ALL possible field names across every Savant endpoint
@@ -564,18 +578,18 @@ def fetch_one_player(info, cache=None):
             'hard_hit_percent',     # CSV expected_statistics
             'ev95percent',          # CSV statcast / JSON custom
             'hard_hit_bip_percent'))
-        result['barrel_pct']    = sane('barrel_pct', g(row,
+        result['barrel_pct']    = sane('barrel_pct', gz(row,
             'brl_percent',          # CSV statcast (brl_percent = per BBE)
             'barrel_batted_rate',   # CSV expected_statistics + JSON
             'brl_bip_percent'))
-        result['barrel_pa']     = sane('barrel_pct', g(row,
+        result['barrel_pa']     = sane('barrel_pct', gz(row,
             'brl_pa'))              # Barrel per PA  -  more stable
         result['xwoba']         = sane('xwoba', g(row,
             'est_woba',             # CSV expected_statistics
             'xwoba'))               # statcast / JSON
         result['woba']          = sane('woba', g(row, 'woba'))
         result['gb_pct']        = sane('gb_pct', g(row,
-            'groundballs_percent', 'gb_percent', 'gb_pct', 'gb'))
+            'groundballs_percent', 'gb_percent', 'gb_pct'))
         result['csw_pct']       = sane('csw_pct', g(row,
             'csw', 'csw_pct', 'called_strike_whiff_pct'))
         # New fields from exit_velocity CSV
@@ -583,7 +597,7 @@ def fetch_one_player(info, cache=None):
         result['sweet_spot_pct']= sane('hard_hit_pct', g(row,
             'anglesweetspotpercent', 'sweet_spot_percent', 'la_sweet_spot_percent'))
         result['fbld_ev']       = sane('exit_velocity', g(row, 'fbld'))
-        result['gb_ev']         = sane('exit_velocity', g(row, 'gb'))
+        result['gb_ev']         = sane('exit_velocity', g(row, 'gb'))  # GB exit velocity (separate from GB rate)
         result['avg_hr_dist']   = g(row, 'avg_hr_distance')
         result['max_hit_speed'] = sane('exit_velocity', g(row, 'max_hit_speed'))
         if result['xwoba'] is not None:
@@ -944,7 +958,7 @@ def compute_pitcher_gate(p):
     hh   = p.get('hard_hit_pct')
     xw   = p.get('xwoba')
     brl  = p.get('barrel_pct')
-    gb   = p.get('gb_pct')
+    gb_ev = p.get('gb_ev')   # GB exit velocity — low = soft grounders = suppressor
     csw  = p.get('csw_pct')
     fbld = p.get('fbld_ev')
 
@@ -956,17 +970,20 @@ def compute_pitcher_gate(p):
     ])
     gate = 'OPEN' if score <= 1 else 'HALF' if score == 2 else 'CLOSED'
 
-    # GB% modifier
+    # GB exit velocity modifier — lower = softer grounders = real suppressor
+    # High GB EV means batters squaring up but hitting down — one mistake elevated = gone
     gb_flag = ''
-    if gb is not None:
-        if gb >= 55:
-            gb_flag = f' GB%={gb}(ELITE-SUPPRESSOR->gate+0.5)'
+    if gb_ev is not None:
+        if gb_ev <= 82:
+            gb_flag = f' GB-EV={gb_ev}(ELITE-soft-grounders->suppressor)'
             if gate == 'OPEN': gate = 'OPEN->HALF'
             elif gate == 'HALF': gate = 'HALF->CLOSED'
-        elif gb >= 48:
-            gb_flag = f' GB%={gb}(SOLID-GB)'
+        elif gb_ev <= 86:
+            gb_flag = f' GB-EV={gb_ev}(soft-contact)'
+        elif gb_ev >= 91:
+            gb_flag = f' GB-EV={gb_ev}(HARD-grounders->mistake-pitch-danger)'
         else:
-            gb_flag = f' GB%={gb}(fly-ball-prone->batter-boost)'
+            gb_flag = f' GB-EV={gb_ev}'
 
     # CSW% modifier
     csw_flag = ''
@@ -974,13 +991,14 @@ def compute_pitcher_gate(p):
         if csw >= 30:   csw_flag = f' CSW%={csw}(ELITE-MISS)'
         elif csw < 25:  csw_flag = f' CSW%={csw}(hittable)'
 
-    # EV50  -  for pitchers, LOWER ev50 = better (softer contact allowed)
+    # EV50 - for pitchers, LOWER ev50 = better (softer contact allowed)
     ev50_flag = ''
     if ev50 is not None:
-        if ev50 >= 103:   ev50_flag = f' EV50={ev50}(DANGER-batters-squaring-up)'
-        elif ev50 <= 96:  ev50_flag = f' EV50={ev50}(ELITE-soft-contact)'
+        if ev50 >= 88:    ev50_flag = f' EV50={ev50}(DANGER-batters-squaring-up)'
+        elif ev50 <= 80:  ev50_flag = f' EV50={ev50}(ELITE-soft-contact)'
+        else:             ev50_flag = f' EV50={ev50}'
 
-    # FB/LD EV for pitchers  -  lower = better
+    # FB/LD EV for pitchers - lower = better
     fbld_flag = ''
     if fbld is not None:
         if fbld >= 95:   fbld_flag = f' FB/LD={fbld}(HARD-fly-balls->HR-risk)'
