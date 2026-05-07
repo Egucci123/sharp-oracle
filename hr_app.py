@@ -112,11 +112,14 @@ SYSTEM_PROMPT = (
     "  CSW%>=30: Contact suppressed for everyone. Hit props fade across the board.\n\n"
 
     "GAP QUALITY — not all gaps are equal:\n"
-    "  COLD gap + wOBA<.250: Regression almost certain. Strong buy.\n"
-    "  COLD gap + wOBA .250-.300: Good buy, some contact issues real.\n"
-    "  HOT gap + wOBA>=.380: Genuinely elite hitter. Hits are real. Only fade HR.\n"
-    "  HOT gap + wOBA<.280: Lucky hitter about to crash. Fade HR AND hits.\n"
-    "  HOT gap + wOBA .280-.340: Fade HR, hits are marginal.\n\n"
+    "  CRITICAL: COLD gap (positive) = xwOBA > wOBA = batter hitting ball BETTER than results show = BUY\n"
+    "  CRITICAL: HOT gap (negative) = wOBA > xwOBA = batter LUCKY, results better than contact quality = FADE HR\n"
+    "  HOT gap NEVER suppresses hits — only HR. A HOT-gap batter with high wOBA is a genuine elite hitter.\n"
+    "  COLD gap + wOBA<.250: regression almost certain. Strong buy.\n"
+    "  COLD gap + wOBA .250-.300: good buy, some contact issues real.\n"
+    "  HOT gap + wOBA>=.380: genuinely elite hitter. Hits are real. Only fade HR.\n"
+    "  HOT gap + wOBA<.280: lucky hitter about to crash. Fade HR AND hits.\n"
+    "  HOT gap + wOBA .280-.340: fade HR, hits are marginal.\n\n"
 
     "WEATHER + PARK MATH:\n"
     "  Every 10F below 70F = ~3-4 feet lost carry. Apply to HR distance:\n"
@@ -139,11 +142,14 @@ SYSTEM_PROMPT = (
     "  Name every signal that fired. Be specific.\n\n"
 
     "DOUBLE SCRUTINY — every pick checked twice:\n"
-    "  HR: Gate open? Platoon fav? GAP not HOT-EXTREME? Temp-adjusted HR dist clears park? "
-    "Not facing GB>=55 specialist with low EV50?\n"
-    "  HIT: wOBA>=.290? Not facing CSW%>=30 pitcher? "
-    "HOT gap + high wOBA OR COLD gap + elite xwOBA? EV>=84?\n"
-    "  Fail any check = drop it. Never force.\n\n"
+    "  HR HARD STOPS — these automatically disqualify, no exceptions, no overrides:\n"
+    "    HR dist<370 = DISQUALIFIED. Full stop. No signal stack overrides this.\n"
+    "    HR dist<385 for SLEEPER HR = DISQUALIFIED. Sleepers need carry to cash.\n"
+    "    HOT gap + HR dist<390 = DISQUALIFIED.\n"
+    "  HR SOFT CHECKS: Gate open? Platoon fav? GAP not HOT-EXTREME? Not facing GB-EV<=81?\n"
+    "  HIT HARD STOPS: wOBA<.270 = disqualify. EV<83 = disqualify.\n"
+    "  HIT SOFT CHECKS: Not facing CSW%>=30? HOT gap + high wOBA OR COLD gap + elite xwOBA?\n"
+    "  Fail any check = drop it. NO PICK is better than a forced bad pick.\n\n"
 
     "DATA RULES: Every number from pre-computed context only. No substitutions. "
     "GAP=xwOBA-wOBA. Positive=COLD. Negative=HOT. [PROXY]=no 2026 data, max B.\n\n"
@@ -1866,3 +1872,4 @@ if __name__ == '__main__':
     t.start()
     server = HTTPServer(('0.0.0.0', PORT), Handler)
     server.serve_forever()
+    
