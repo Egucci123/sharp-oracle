@@ -94,6 +94,9 @@ SYSTEM_PROMPT = (
     "Batter with avg EV 88 but EV50 104 is an elite power threat. Market sees 88, you see 104.\n"
     "  FB/LD EV is the only EV that matters for HRs. Batter with avg EV 87 but FB/LD EV 97 "
     "crushes the ball when elevated. Market fades him, you buy him.\n"
+    "  FB/LD MISMATCH: Compare batter FB/LD EV directly to pitcher FB/LD EV allowed. "
+    "Batter FB/LD 97 vs pitcher FB/LD 90 = 7-point gap = batter hits it significantly harder "
+    "than pitcher allows. This is a direct carry advantage the market doesn't price.\n"
     "  SS% + HR distance together: High SS% + HR dist<385 = warning track machine, fade HR. "
     "High SS% + HR dist>410 = elite HR profile, buy.\n"
     "  Barrel/PA on high-K batters: High-K hitters have fewer BBE, making Barrel/BBE look weak. "
@@ -1872,4 +1875,3 @@ if __name__ == '__main__':
     t.start()
     server = HTTPServer(('0.0.0.0', PORT), Handler)
     server.serve_forever()
-    
