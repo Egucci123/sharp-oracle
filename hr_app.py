@@ -35,13 +35,14 @@ _HEADERS = {
 
 # ─── MODEL RULES ──────────────────────────────────────────────────────────────
 LOCKED_RULES = """
-PITCHER GATE (contact allowed, 0-4 pts):
-  EV>=91 | HH%>=50 | xwOBA>=.350 | Barrel%>=12 = 1pt each
-  (calibrated to real 2026: EV 91=top-25%, Barrel 12=top-10%)
-  0-1=OPEN | 2=HALF | 3-4=CLOSED
-  GB-EV<=81=ELITE-soft-grounders(closes gate half step, bot-10%)
-  GB-EV>=90=HARD-grounders-danger(gate understates risk, top-10%)
-  Pitcher EV50: <=74=ELITE(top-10%) | <=77=PLUS(top-25%) | <=80=avg | >=84=below-avg | >=87=DANGER
+PITCHER GATE (suppression score, 0-4 pts):
+  Score 1pt for each metric showing SUPPRESSED contact:
+  EV<=88 | HH%<=38 | xwOBA<=.310 | Barrel%<=7 = 1pt each (pitcher suppressing)
+  0-1=OPEN(hittable,bet batters) | 2=HALF | 3-4=CLOSED(elite suppressor,fade HR)
+  DANGER signals (pitcher being crushed): EV>=92 | HH%>=52 | Brl%>=16 | xwOBA>=.370
+  GB-EV<=81=soft-grounders-suppressor(closes gate half step)
+  GB-EV>=90=hard-grounders-danger(batters squaring up)
+  Pitcher EV50<=77=PLUS-soft-contact | EV50<=74=ELITE | EV50>=84=below-avg | EV50>=87=DANGER
 
 BATTER GRADE (0-4 pts):
   Barrel%>=15 | xwOBA>=.350 | EV>=91 | HH%>=50 = 1pt each
@@ -97,22 +98,30 @@ SYSTEM_PROMPT = (
     "  FB/LD MISMATCH: Compare batter FB/LD EV directly to pitcher FB/LD EV allowed. "
     "Batter FB/LD 97 vs pitcher FB/LD 90 = 7-point gap = batter hits it significantly harder "
     "than pitcher allows. This is a direct carry advantage the market doesn't price.\n"
+    "  HR RANKING TIEBREAKER: When comparing two B+ HR candidates, rank by: "
+    "(1) GAP direction — COLD gap beats HOT gap every time for HR ranking, same carry distance. "
+    "(2) HR dist — higher carry wins. "
+    "(3) FB/LD EV gap vs pitcher — bigger gap wins. "
+    "(4) Platoon — FAV beats SAME. "
+    "A COLD-gap B+ batter is a better HR pick than a HOT-gap B batter with similar carry. "
+    "Do NOT penalize a batter more heavily for a soft-contact pitcher when their own FB/LD EV "
+    "clearly overpowers it.\n"
     "  SS% + HR distance together: High SS% + HR dist<385 = warning track machine, fade HR. "
     "High SS% + HR dist>410 = elite HR profile, buy.\n"
     "  Barrel/PA on high-K batters: High-K hitters have fewer BBE, making Barrel/BBE look weak. "
     "Barrel/PA>=10 on a high-K batter = true elite power the market undervalues.\n\n"
 
     "PITCHER READS:\n"
-    "  GB-EV<=82: Elite soft grounders — real suppressor, gate closes half step. "
-    "Batters hitting it weakly even on the ground.\n"
-    "  GB-EV>=91: Batters squaring him up but hitting it down. One elevated pitch = gone. "
-    "Gate score may be misleading — more dangerous than it looks.\n"
-    "  GB-EV 83-90: Neutral, use other signals.\n"
-    "  FB/LD EV>=95: Hard fly balls allowed — HR risk is real when batters elevate.\n"
-    "  FB/LD EV<=88: Soft fly balls — suppressor on elevated contact.\n"
-    "  Pitcher EV50<=80: Genuine soft contact, suppressor confirmed.\n"
-    "  Pitcher EV50>=88: Batters squaring him up — gate may understate danger.\n"
-    "  CSW%>=30: Contact suppressed for everyone. Hit props fade across the board.\n\n"
+    "  GATE LOGIC: Score 1pt per SUPPRESSION signal. OPEN=hittable=bet batters. CLOSED=suppressor=fade HR.\n"
+    "  A CLOSED gate means the pitcher is ELITE and hard to hit — not that he's being crushed.\n"
+    "  DANGER signals (pitcher being hit hard): EV>=92, HH%>=52, Brl%>=16, xwOBA>=.370.\n"
+    "  DANGER signals mean bet batters HARDER — this pitcher is getting destroyed.\n"
+    "  GB-EV<=81: Elite soft grounders — real suppressor, gate closes half step.\n"
+    "  GB-EV>=90: Batters squaring him up on grounders — mistake pitch danger.\n"
+    "  Pitcher EV50<=77: PLUS soft contact, genuine suppressor.\n"
+    "  Pitcher EV50>=84: Batters making hard contact — more hittable than gate suggests.\n"
+    "  FB/LD EV>=95: Hard fly balls allowed — HR risk when batters elevate.\n"
+    "  FB/LD EV<=90: Soft fly balls — suppressor on elevated contact.\n\n"
 
     "GAP QUALITY — not all gaps are equal:\n"
     "  CRITICAL: COLD gap (positive) = xwOBA > wOBA = batter hitting ball BETTER than results show = BUY\n"
@@ -145,14 +154,16 @@ SYSTEM_PROMPT = (
     "  Name every signal that fired. Be specific.\n\n"
 
     "DOUBLE SCRUTINY — every pick checked twice:\n"
-    "  HR HARD STOPS — these automatically disqualify, no exceptions, no overrides:\n"
-    "    HR dist<370 = DISQUALIFIED. Full stop. No signal stack overrides this.\n"
-    "    HR dist<385 for SLEEPER HR = DISQUALIFIED. Sleepers need carry to cash.\n"
-    "    HOT gap + HR dist<390 = DISQUALIFIED.\n"
-    "  HR SOFT CHECKS: Gate open? Platoon fav? GAP not HOT-EXTREME? Not facing GB-EV<=81?\n"
+    "  HR HARD STOPS — automatic disqualification:\n"
+    "    HR dist<370 = DISQUALIFIED for ANY HR pick, no exceptions.\n"
+    "    HR dist<385 = DISQUALIFIED for SLEEPER HR only. Core A/B+ picks still live above 370.\n"
+    "    HOT-EXTREME gap (>=.080) + HR dist<390 = DISQUALIFIED.\n"
+    "    CLOSED gate (3/4 score) = downgrade one full letter grade on HR (A->B+, B+->B).\n"
+    "    CLOSED gate + HR dist<390 = DISQUALIFIED even for core picks.\n"
+    "  HR SOFT CHECKS (open/half gate): Platoon fav? GAP not HOT-EXTREME? Temp-adjusted carry ok?\n"
     "  HIT HARD STOPS: wOBA<.270 = disqualify. EV<83 = disqualify.\n"
-    "  HIT SOFT CHECKS: Not facing CSW%>=30? HOT gap + high wOBA OR COLD gap + elite xwOBA?\n"
-    "  Fail any check = drop it. NO PICK is better than a forced bad pick.\n\n"
+    "  NOTE: wOBA .270-.290 passes hard stop but is low confidence — fade unless other signals strong.\n"
+    "  Fail hard stop = drop it. NO PICK is better than a forced bad pick.\n\n"
 
     "DATA RULES: Every number from pre-computed context only. No substitutions. "
     "GAP=xwOBA-wOBA. Positive=COLD. Negative=HOT. [PROXY]=no 2026 data, max B.\n\n"
@@ -969,18 +980,20 @@ def compute_pitcher_gate(p):
     hh   = p.get('hard_hit_pct')
     xw   = p.get('xwoba')
     brl  = p.get('barrel_pct')
-    gb_ev = p.get('gb_ev')   # GB exit velocity — low = soft grounders = suppressor
+    gb_ev = p.get('gb_ev')
     csw  = p.get('csw_pct')
     fbld = p.get('fbld_ev')
 
-    # Thresholds calibrated to real 2026 distributions
-    # EV>=91 = top 25% pitchers (old 93 was top 5% - almost never fired)
-    # Barrel>=12 = top 10% pitchers (old 15 was top 5% - almost never fired)
+    # GATE = pitcher suppression score
+    # Score 1pt for each metric showing SUPPRESSED contact (low = good for pitcher)
+    # 0-1 = OPEN (hittable, bet batters)
+    # 2   = HALF (moderate suppression)
+    # 3-4 = CLOSED (elite suppressor, fade batters HR)
     score = sum([
-        1 if (ev  is not None and ev  >= 91.0) else 0,
-        1 if (hh  is not None and hh  >= 50.0) else 0,
-        1 if (xw  is not None and xw  >= 0.350) else 0,
-        1 if (brl is not None and brl >= 12.0) else 0,
+        1 if (ev  is not None and ev  <= 88.0) else 0,   # EV<=88 = soft contact (bot-25%)
+        1 if (hh  is not None and hh  <= 38.0) else 0,   # HH%<=38 = low hard hits (bot-25%)
+        1 if (xw  is not None and xw  <= 0.310) else 0,  # xwOBA<=.310 = quality suppressed
+        1 if (brl is not None and brl <= 7.0)  else 0,   # Barrel%<=7 = barrels suppressed
     ])
     gate = 'OPEN' if score <= 1 else 'HALF' if score == 2 else 'CLOSED'
 
@@ -1021,13 +1034,21 @@ def compute_pitcher_gate(p):
         if fbld >= 95:   fbld_flag = f' FB/LD={fbld}(HARD-fly-balls->HR-risk,top-12%)'
         elif fbld <= 90: fbld_flag = f' FB/LD={fbld}(SOFT-fly-balls->suppressor,bottom-10%)'
 
+    # Danger flags for context (pitcher being hit hard)
+    danger = []
+    if ev  is not None and ev  >= 92.0: danger.append(f'EV={ev}(DANGER)')
+    if hh  is not None and hh  >= 52.0: danger.append(f'HH%={hh}(DANGER)')
+    if brl is not None and brl >= 16.0: danger.append(f'Brl%={brl}(DANGER)')
+    if xw  is not None and xw  >= 0.370: danger.append(f'xwOBA={xw}(DANGER)')
+
     pts = [
-        f"EV={ev or 'N/A'}{'✓' if ev and ev>=91 else '✗'}",
-        f"HH%={hh or 'N/A'}{'✓' if hh and hh>=50 else '✗'}",
-        f"xwOBA={xw or 'N/A'}{'✓' if xw and xw>=0.350 else '✗'}",
-        f"Brl%={brl or 'N/A'}{'✓' if brl and brl>=12 else '✗'}",
+        f"EV={ev or 'N/A'}{'✓suppress' if ev and ev<=88 else '(hittable)' if ev else ''}",
+        f"HH%={hh or 'N/A'}{'✓suppress' if hh and hh<=38 else '(hittable)' if hh else ''}",
+        f"xwOBA={xw or 'N/A'}{'✓suppress' if xw and xw<=0.310 else '(hittable)' if xw else ''}",
+        f"Brl%={brl or 'N/A'}{'✓suppress' if brl is not None and brl<=7 else '(hittable)' if brl is not None else ''}",
     ]
-    return score, gate, ' | '.join(pts) + gb_flag + csw_flag + ev50_flag + fbld_flag
+    danger_str = ' DANGER:'+','.join(danger) if danger else ''
+    return score, gate, ' | '.join(pts) + danger_str + gb_flag + csw_flag + ev50_flag + fbld_flag
 
 def compute_batter_score(b):
     brl    = b.get('barrel_pct')
