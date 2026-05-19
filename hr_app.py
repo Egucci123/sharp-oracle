@@ -91,25 +91,18 @@ SYSTEM_PROMPT = (
     "EDGE MATRIX — data-driven edges the market systematically misprices:\n\n"
 
     "POWER PROFILE:\n"
-    "  EV50 is your primary power signal, not avg EV. Avg EV gets dragged down by grounders. "
-    "Batter with avg EV 88 but EV50 104 is an elite power threat. Market sees 88, you see 104.\n"
-    "  FB/LD EV is the only EV that matters for HRs. Batter with avg EV 87 but FB/LD EV 97 "
-    "crushes the ball when elevated. Market fades him, you buy him.\n"
-    "  FB/LD MISMATCH: Compare batter FB/LD EV directly to pitcher FB/LD EV allowed. "
-    "Batter FB/LD 97 vs pitcher FB/LD 90 = 7-point gap = batter hits it significantly harder "
-    "than pitcher allows. This is a direct carry advantage the market doesn't price.\n"
-    "  HR RANKING TIEBREAKER: When comparing two B+ HR candidates, rank by: "
-    "(1) GAP direction — COLD gap beats HOT gap every time for HR ranking, same carry distance. "
-    "(2) HR dist — higher carry wins. "
-    "(3) FB/LD EV gap vs pitcher — bigger gap wins. "
-    "(4) Platoon — FAV beats SAME. "
-    "A COLD-gap B+ batter is a better HR pick than a HOT-gap B batter with similar carry. "
-    "Do NOT penalize a batter more heavily for a soft-contact pitcher when their own FB/LD EV "
-    "clearly overpowers it.\n"
-    "  SS% + HR distance together: High SS% + HR dist<385 = warning track machine, fade HR. "
-    "High SS% + HR dist>410 = elite HR profile, buy.\n"
-    "  Barrel/PA on high-K batters: High-K hitters have fewer BBE, making Barrel/BBE look weak. "
-    "Barrel/PA>=10 on a high-K batter = true elite power the market undervalues.\n\n"
+    "  Every batter has a pre-computed HR POWER INDEX (HPI, 0-10) cross-referencing ALL power signals.\n"
+    "  HPI>=7.0 = elite HR candidate. HPI 5.0-6.9 = B+ candidate. HPI 3.0-4.9 = dart. HPI<3.0 = fade.\n"
+    "  HPI is your PRIMARY HR ranking tool. Sort all candidates by HPI first, then adjust:\n"
+    "    -1.5 for SAME platoon | -1.0 for CLOSED gate | -2.0 for HOT-EXTREME gap\n"
+    "    +0.5 for BOOSTER park | -1.5 for SUPPRESSOR park | -3.0 for HR dist<370 (hard stop)\n"
+    "  The batter with the highest adjusted HPI who passes hard stops = your #1 HR pick.\n"
+    "  A batter can have low 4-point score but high HPI if EV50+FB/LD+carry are elite.\n"
+    "  Example: Stanton EV=94 but EV50=104.8, FB/LD=97.8, HR_dist=410 → HPI 8.0 = legitimate A- HR.\n\n"
+    "  EV50 is the single best HR predictor in Statcast. It removes grounders/weak contact.\n"
+    "  FB/LD EV is the EV that matters for HRs — only elevated contact becomes home runs.\n"
+    "  FB/LD MISMATCH vs pitcher: Batter FB/LD 97 vs pitcher FB/LD allowed 90 = direct carry edge.\n"
+    "  Barrel/PA>=10 on high-K batter = true elite power rate the market undervalues.\n\n"
 
     "PITCHER READS:\n"
     "  GATE LOGIC: Score 1pt per SUPPRESSION signal. OPEN=hittable=bet batters. CLOSED=suppressor=fade HR.\n"
@@ -125,7 +118,9 @@ SYSTEM_PROMPT = (
 
     "GAP QUALITY — not all gaps are equal:\n"
     "  CRITICAL: COLD gap (positive) = xwOBA > wOBA = batter hitting ball BETTER than results show = BUY\n"
-    "  CRITICAL: HOT gap (negative) = wOBA > xwOBA = batter LUCKY, results better than contact quality = FADE HR\n"
+    "  HOT gap (negative) = wOBA > xwOBA = batter LUCKY, results better than contact = FADE HR always.\n"
+    "    Magnitude determines strength: -.010 = weak fade, -.050 = moderate fade, -.080+ = extreme fade.\n"
+    "    HOT gap NEVER = 'minimal HR fade' — it always fades HR. Only magnitude varies.\n"
     "  HOT gap (-.000 to -.079): Fades HR only. Hits remain live.\n"
     "  HOT-EXTREME gap (magnitude >=.080, meaning gap <= -.080): Fades HR hard. Also flag hits.\n"
     "  HOT-EXTREME gap (magnitude >=.120, meaning gap <= -.120): FADE BOTH HR AND HITS.\n"
@@ -144,6 +139,7 @@ SYSTEM_PROMPT = (
     "  BOOSTER park: HR dist>=380 = live carry. HR dist<380 = marginal.\n"
     "  NEUTRAL park: HR dist>=390 = live carry. HR dist<390 = marginal, lower confidence.\n"
     "  SUPPRESSOR park: HR dist>=405 = live. HR dist<405 = fade.\n"
+    "    HR dist unknown/missing at SUPPRESSOR park = SKIP HR pick, HIT only.\n"
     "  DOME parks (Chase Field, Globe Life, Tropicana, AmFam): no weather adjustment BUT\n"
     "    neutral carry environment. Treat as NEUTRAL park for HR dist thresholds.\n"
     "    Chase Field specifically has 374ft alleys — HR dist<390 is genuine warning track risk.\n"
@@ -180,6 +176,14 @@ SYSTEM_PROMPT = (
 
     "OUTPUT: Full sharp analysis — every layer, every edge, specific numbers. "
     "Then four sections:\n\n"
+    "CRITICAL OUTPUT RULE: The TOP 2 HR and TOP 2 HIT sections must contain actual picks OR "
+    "explicitly say 'NO SECOND [HR/HIT] PICK' with brief reason. "
+    "NEVER fill a slot with a player you are fading — that wastes the slot and confuses the bet. "
+    "If only 1 HR candidate clears scrutiny, list 1 HR pick and write "
+    "'NO SECOND HR PICK — [reason]' for slot 2.\n"
+    "CONFIDENCE ORDERING: If a sleeper has higher internal confidence than a core pick candidate, "
+    "PROMOTE the sleeper to the core section and move the lower-confidence pick to sleeper or drop it. "
+    "Internal confidence <6/10 = NO PICK regardless of which section. Never put a 5/10 pick in TOP 2.\n\n"
     "TOP 2 HR BETS:\n"
     "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sentences — exact metrics, temp-adjusted carry, the specific edge]\n"
     "2. [Name] ([Team]) | Grade: [X] | [odds] | [2 sentences]\n\n"
@@ -406,18 +410,21 @@ def load_stats_cache():
                 f"{row.get('first_name','')} {row.get('last_name','')}".strip()).strip(' ,')
 
     def pull_rows(rows):
-        """Store/merge a list of player rows into the stats cache."""
+        """Store/merge a list of player rows into the stats cache, keyed by player_type."""
         count = 0
         for row in rows:
             name = parse_name(row)
             if name and len(name) > 2:
-                key = normalize_name(name).lower()
+                # Prefix key with player_type to prevent pitcher stats polluting batter lookups
+                base_key = normalize_name(name).lower()
+                key = f"{player_type}::{base_key}"
                 if key in _stats_cache:
                     for k, v in row.items():
                         if v not in ('', None, 'null', 'None', 'NaN'):
                             _stats_cache[key][k] = v
                 else:
                     _stats_cache[key] = dict(row)
+                    _stats_cache[key]['__player_type__'] = player_type
                 count += 1
         return count
 
@@ -442,10 +449,10 @@ def load_stats_cache():
 
     def pull_endpoint(url, player_type):
         raw = savant_get(url, accept_json=True, timeout=25)
-        return pull_rows(parse_raw(raw))
+        return pull_rows(parse_raw(raw), player_type)
 
     def pull_endpoint_raw(raw, player_type):
-        return pull_rows(parse_raw(raw))
+        return pull_rows(parse_raw(raw), player_type)
 
     import os as _os
 
@@ -499,19 +506,25 @@ def clear_stats_cache():
         _stats_loaded = False
         _stats_loading = False
 
-def get_cached_stats(name, cache=None):
-    """Look up player by name from bulk cache."""
+def get_cached_stats(name, cache=None, player_type='batter'):
+    """Look up player by name from bulk cache. player_type = 'batter' or 'pitcher'."""
     if cache is None:
         cache = load_stats_cache()
-    key = normalize_name(name).lower()
-    if key in cache:
-        return cache[key]
-    parts = key.split()
+    base_key = normalize_name(name).lower()
+    # Try typed key first (correct: pitcher stats for pitchers, batter stats for batters)
+    typed_key = f"{player_type}::{base_key}"
+    if typed_key in cache:
+        return cache[typed_key]
+    # Try name variants with typed prefix
+    parts = base_key.split()
     if len(parts) >= 2:
-        if f'{parts[0]} {parts[-1]}' in cache:
-            return cache[f'{parts[0]} {parts[-1]}']
-        if f'{parts[-1]}, {parts[0]}' in cache:
-            return cache[f'{parts[-1]}, {parts[0]}']
+        k1 = f"{player_type}::{parts[0]} {parts[-1]}"
+        k2 = f"{player_type}::{parts[-1]}, {parts[0]}"
+        if k1 in cache: return cache[k1]
+        if k2 in cache: return cache[k2]
+    # Legacy fallback: untyped key (for backward compat with old cache)
+    if base_key in cache:
+        return cache[base_key]
     return None
 
 # ─── SAVANT PAGE SCRAPE (last-resort fallback only) ─────────────────────────
@@ -581,7 +594,8 @@ def fetch_one_player(info, cache=None):
         return result
 
     # SOURCE 1: bulk cache — use pre-loaded cache if provided
-    row = get_cached_stats(name, cache=cache)
+    player_type = 'pitcher' if info.get('role') == 'PITCHER' else 'batter'
+    row = get_cached_stats(name, cache=cache, player_type=player_type)
     if row:
         def g(row, *keys):
             """Returns first positive non-null value. Use for EV, HH% etc where 0 means missing."""
@@ -1152,13 +1166,93 @@ def compute_batter_score(b):
         lineup_pos <= 5):
         upgrade14_flag = ' [#14-ELITE-PROFILE:C-DART-if-booster]'
 
+    # HR POWER INDEX — cross-reference all power signals into single score (0-10)
+    # This gives Marcus a single number to rank candidates instead of mentally integrating
+    hpi = 0.0
+    hpi_signals = []
+
+    # Core contact quality (0-3 pts)
+    if brl is not None:
+        if brl >= 20:   hpi += 1.5; hpi_signals.append(f'Brl%{brl}(ELITE)')
+        elif brl >= 15: hpi += 1.0; hpi_signals.append(f'Brl%{brl}(GOOD)')
+        elif brl >= 12: hpi += 0.5; hpi_signals.append(f'Brl%{brl}(OK)')
+    if ev is not None:
+        if ev >= 93:    hpi += 1.0; hpi_signals.append(f'EV{ev}(ELITE)')
+        elif ev >= 91:  hpi += 0.5; hpi_signals.append(f'EV{ev}(GOOD)')
+    if hh is not None:
+        if hh >= 52:    hpi += 1.0; hpi_signals.append(f'HH%{hh}(ELITE)')
+        elif hh >= 45:  hpi += 0.5; hpi_signals.append(f'HH%{hh}(GOOD)')
+
+    # True power metrics (0-3 pts) — these are the real HR predictors
+    if ev50 is not None:
+        if ev50 >= 106: hpi += 2.0; hpi_signals.append(f'EV50={ev50}(ELITE++)')
+        elif ev50 >= 104: hpi += 1.5; hpi_signals.append(f'EV50={ev50}(ELITE)')
+        elif ev50 >= 102: hpi += 1.0; hpi_signals.append(f'EV50={ev50}(PLUS)')
+        elif ev50 >= 100: hpi += 0.5; hpi_signals.append(f'EV50={ev50}(OK)')
+    if fbld is not None:
+        if fbld >= 99:  hpi += 1.5; hpi_signals.append(f'FB/LD={fbld}(ELITE++)')
+        elif fbld >= 97: hpi += 1.0; hpi_signals.append(f'FB/LD={fbld}(ELITE)')
+        elif fbld >= 94: hpi += 0.5; hpi_signals.append(f'FB/LD={fbld}(GOOD)')
+    if brl_pa is not None:
+        if brl_pa >= 12: hpi += 1.0; hpi_signals.append(f'Brl/PA={brl_pa}(ELITE)')
+        elif brl_pa >= 8: hpi += 0.5; hpi_signals.append(f'Brl/PA={brl_pa}(GOOD)')
+
+    # Carry (0-2 pts)
+    if hr_dist and hr_dist > 0:
+        if hr_dist >= 415:   hpi += 2.0; hpi_signals.append(f'DIST={int(hr_dist)}(ELITE++)')
+        elif hr_dist >= 410: hpi += 1.5; hpi_signals.append(f'DIST={int(hr_dist)}(ELITE)')
+        elif hr_dist >= 400: hpi += 1.0; hpi_signals.append(f'DIST={int(hr_dist)}(GOOD)')
+        elif hr_dist >= 390: hpi += 0.5; hpi_signals.append(f'DIST={int(hr_dist)}(OK)')
+        elif hr_dist < 370:  hpi -= 3.0; hpi_signals.append(f'DIST={int(hr_dist)}(HARD-STOP)')
+        elif hr_dist < 385:  hpi -= 1.5; hpi_signals.append(f'DIST={int(hr_dist)}(SHORT)')
+
+    # SS% launch angle bonus (0-0.5 pts)
+    if ss is not None and ss >= 38:
+        hpi += 0.5; hpi_signals.append(f'SS%={ss}(ELITE-LA)')
+
+    # GAP modifier
+    if gap is not None:
+        if gap >= 0.100:  hpi += 1.0; hpi_signals.append('COLD-BUY')
+        elif gap > 0:     hpi += 0.5; hpi_signals.append('COLD')
+        elif gap < -0.080: hpi -= 1.5; hpi_signals.append('HOT-EXTREME')
+        elif gap < 0:     hpi -= 0.5; hpi_signals.append('HOT')
+
+    hpi = round(min(10.0, max(0.0, hpi)), 1)
+    hpi_str = f' HPI={hpi}/10[{",".join(hpi_signals[:4])}]'
+
+    # HR DISTANCE HARD STOPS — enforce in code, not just prompt
+    hr_stop = ''
+    if hr_dist and hr_dist > 0:
+        if hr_dist < 370:
+            hr_stop = f' ⛔HR-DIST={hr_dist}(HARD-STOP:<370-DISQUALIFIED-ANY-HR)'
+        elif hr_dist < 385:
+            hr_stop = f' ⚠HR-DIST={hr_dist}(DISQUALIFIED-SLEEPER-HR)'
+        elif hr_dist < 390:
+            hr_stop = f' HR-DIST={hr_dist}(MARGINAL-neutral-park)'
+        elif hr_dist < 405:
+            hr_stop = f' HR-DIST={hr_dist}(LIVE-booster/neutral)'
+        elif hr_dist >= 410:
+            hr_stop = f' HR-DIST={hr_dist}(ELITE-CARRY)'
+        else:
+            hr_stop = f' HR-DIST={hr_dist}(avg)'
+        hrd_flag = ''  # replace hrd_flag with hr_stop
+
+    # HOT-EXTREME gap hard stops
+    gap_stop = ''
+    if gap is not None:
+        mag = abs(gap)
+        if mag >= 0.120:
+            gap_stop = f' ⛔HOT-EXTREME-{mag:.3f}(FADE-BOTH-HR-AND-HITS)'
+        elif mag >= 0.080 and gap < 0:
+            gap_stop = f' ⚠HOT-EXTREME-{mag:.3f}(FADE-HR-FLAG-HITS)'
+
     pts = [
         f"Brl={brl or 'N/A'}{'✓' if brl and brl>=15 else '✗'}",
         f"xwOBA={xw or 'N/A'}{'✓' if xw and xw>=0.350 else '✗'}",
         f"EV={ev or 'N/A'}{'✓' if ev and ev>=91 else '✗'}",
         f"HH%={hh or 'N/A'}{'✓' if hh and hh>=hh_threshold else '✗'}",
     ]
-    extra = ev50_flag + ss_flag + fbld_flag + hrd_flag + brl_pa_flag
+    extra = ev50_flag + ss_flag + fbld_flag + hr_stop + brl_pa_flag + gap_stop + hpi_str
     upgrade_flags = upgrade2_flag + upgrade3_flag + upgrade10_flag + upgrade14_flag
     return score, ' | '.join(pts) + extra + upgrade_flags, gap_flag, hr_cap
 
