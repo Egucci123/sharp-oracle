@@ -56,14 +56,14 @@ CONTACT METRICS (all from statcast CSV, calibrated to real 2026 distributions):
   Barrel/PA%>=10=ELITE true power rate(top-10%)
   GB-EV = pitcher soft contact signal (lower = softer grounders = real suppressor)
 
-PLATOON: LHB vs RHP=fav | RHB vs LHP=fav | Switch=fav | Same-side=drops half grade
+PLATOON: LHB vs RHP=fav | RHB vs LHP=fav | Switch=fav | Same-side=-0.5 HPI (NOT grade drop, NOT veto)
 GAP: xwOBA-wOBA. Positive=COLD(buy). Negative=HOT(fade for HR, good for hits).
 PARKS: BOOSTER=Yankee/GABP/CBP/Coors/Sutter | SUPPRESSOR=Comerica/Petco/Oracle/T-Mobile
 DOMES(no weather): AmFam/Tropicana/Globe Life/Chase Field
 WEATHER: >=85F=boost | <=50F=suppress | <=45F=hard suppress
 
 #1 Bullpen: pen ERA>=5.50 -> Barrel>=15+xwOBA>=.350 = Bullpen Tier
-#2 Regression Gap: xwOBA>=.420+gap>=+.100 -> HH% drops to 45%
+#2 Regression Buy: xwOBA>=.420+gap>=+.100 = STRONG BUY signal, elite hitter underperforming results
 #3 Elite Barrel: 4/4+Barrel>=25%+positive gap -> pitcher cold flag half step
 #4 Stack: 3+ same-team B+ vs same pitcher -> widen net
 #5 Late Bullpen: weak pen -> Barrel>=15+xwOBA>=.350 = valid
@@ -92,13 +92,16 @@ SYSTEM_PROMPT = (
 
     "POWER PROFILE:\n"
     "  Every batter has a pre-computed HR POWER INDEX (HPI, 0-10) cross-referencing ALL power signals.\n"
-    "  HPI>=7.0 = elite HR candidate. HPI 5.0-6.9 = B+ candidate. HPI 3.0-4.9 = dart. HPI<3.0 = fade.\n"
+    "  HPI>=7.0 = elite HR candidate. HPI 5.0-6.9 = B+ candidate. HPI 3.5-4.9 = B grade pick.\n"
     "  HPI is your PRIMARY HR ranking tool. Sort all candidates by HPI first, then adjust:\n"
-    "    -1.5 for SAME platoon | -1.0 for CLOSED gate | -2.0 for HOT-EXTREME gap\n"
-    "    +0.5 for BOOSTER park | -1.5 for SUPPRESSOR park | -3.0 for HR dist<370 (hard stop)\n"
-    "  The batter with the highest adjusted HPI who passes hard stops = your #1 HR pick.\n"
-    "  A batter can have low 4-point score but high HPI if EV50+FB/LD+carry are elite.\n"
-    "  Example: Stanton EV=94 but EV50=104.8, FB/LD=97.8, HR_dist=410 → HPI 8.0 = legitimate A- HR.\n\n"
+    "    -0.5 for SAME platoon (disadvantage, NOT a dealbreaker — elite power overcomes it)\n"
+    "    -1.0 for CLOSED gate | -2.0 for HOT-EXTREME gap\n"
+    "    +0.5 for BOOSTER park | -1.0 for SUPPRESSOR park | -3.0 for HR dist<370 (hard stop)\n"
+    "  Adjusted HPI>=4.5 = pick it. Adjusted HPI 3.5-4.4 = B grade, list with caveat. <3.0 = fade.\n"
+    "  SAME platoon is -0.5 penalty ONLY. Caminero EV50 104.8 + FB/LD 96.7 + HR dist 407 = HPI 5.5,\n"
+    "    adjusted to 5.0 after SAME penalty = STILL A PICK. Do not veto elite power on platoon alone.\n"
+    "  wOBA is IRRELEVANT for HR picks. Use xwOBA. Mayo wOBA .267 but xwOBA .340 + EV50 104 = HR threat.\n"
+    "  Market prices wOBA. You price xwOBA + EV50 + carry distance. That gap IS the edge.\n\n"
     "  EV50 is the single best HR predictor in Statcast. It removes grounders/weak contact.\n"
     "  FB/LD EV is the EV that matters for HRs — only elevated contact becomes home runs.\n"
     "  FB/LD MISMATCH vs pitcher: Batter FB/LD 97 vs pitcher FB/LD allowed 90 = direct carry edge.\n"
@@ -129,8 +132,9 @@ SYSTEM_PROMPT = (
     "    Example: wOBA .433 + xwOBA .274 = gap -.159 = magnitude .159 >=.120 = crash incoming on hits.\n"
     "  HOT gap + wOBA>=.380: Genuinely elite hitter. Hits are real. Only fade HR.\n"
     "  HOT gap + wOBA<.280: Lucky hitter about to crash. Fade HR AND hits.\n"
-    "  COLD gap + wOBA<.250: Regression almost certain. Strong buy.\n"
-    "  COLD gap + wOBA .250-.300: Good buy, some contact issues real.\n\n"
+    "  COLD gap + wOBA<.250: Strong regression buy — xwOBA is the truth.\n"
+    "  COLD gap + wOBA .250-.310: Good HR buy — market prices wOBA, you price xwOBA+EV50.\n"
+    "  COLD gap>=+.060: Overrides wOBA floor for HR — if xwOBA>=.310 + EV50>=100, it's a pick.\n\n"
 
     "WEATHER + PARK MATH:\n"
     "  Every 10F below 70F = ~3-4 feet lost carry. Apply to HR distance:\n"
@@ -154,22 +158,27 @@ SYSTEM_PROMPT = (
     "  * COLD gap>=+.100 + lineup spots 6-9 = market completely ignores him\n"
     "  * Pitcher EV50>=83 + elite power batter (EV50>=103) = hard contact danger, gate undersells HR risk\n"
     "  * HOT gap + wOBA>=.380 = genuine elite hitter, hit props are real value\n"
-    "  SLEEPER HR requires 2+ signals AND:\n"
-    "    HR dist>=385. EV>=88 (can make contact). Not SAME platoon unless 3+ signals.\n"
-    "    Internal confidence <6/10 = NO PICK. A 5/10 confidence sleeper is not a bet.\n"
-    "    1/4 score + SAME platoon + weak EV = no sleeper regardless of carry or Brl/PA.\n\n"
+    "  SLEEPER HR requires 2+ signals AND HR dist>=380. EV>=86. HPI>=3.0 after adjustments.\n"
+    "    SAME platoon is -0.5 HPI only — does not block sleeper status.\n"
+    "    3+ signals = LOCK SLEEPER regardless of platoon.\n\n"
 
     "DOUBLE SCRUTINY — every pick checked twice:\n"
-    "  HR HARD STOPS — automatic disqualification:\n"
-    "    HR dist<370 = DISQUALIFIED for ANY HR pick, no exceptions.\n"
-    "    HR dist<385 = DISQUALIFIED for SLEEPER HR only. Core A/B+ picks still live above 370.\n"
-    "    HOT-EXTREME gap (>=.080) + HR dist<390 = DISQUALIFIED.\n"
-    "    CLOSED gate (3/4 score) = downgrade one full letter grade on HR (A->B+, B+->B).\n"
-    "    CLOSED gate + HR dist<390 = DISQUALIFIED even for core picks.\n"
-    "  HR SOFT CHECKS (open/half gate): Platoon fav? GAP not HOT-EXTREME? Temp-adjusted carry ok?\n"
-    "  HIT HARD STOPS: wOBA<.270 = disqualify. EV<83 = disqualify.\n"
-    "  NOTE: wOBA .270-.290 passes hard stop but is low confidence — fade unless other signals strong.\n"
-    "  Fail hard stop = drop it. NO PICK is better than a forced bad pick.\n\n"
+    "  HR HARD STOPS — very few true disqualifications:\n"
+    "    HR dist<370 = DISQUALIFIED for ANY HR pick. Non-negotiable.\n"
+    "    HR dist<380 = DISQUALIFIED for SLEEPER HR only. Core picks live above 370.\n"
+    "    HOT-EXTREME gap (magnitude>=.120) = FADE BOTH HR AND HITS always.\n"
+    "    HOT-EXTREME gap (magnitude .080-.119) + HR dist<park_threshold = disqualify HR.\n"
+    "    CLOSED gate (3/4) = downgrade one letter on HR. NOT auto-disqualify.\n"
+    "  Park-specific HOT-EXTREME disqualification thresholds:\n"
+    "    BOOSTER park: HOT-EXTREME + HR dist<375 = disqualify.\n"
+    "    NEUTRAL/DOME: HOT-EXTREME + HR dist<385 = disqualify.\n"
+    "    SUPPRESSOR: HOT-EXTREME + HR dist<395 = disqualify.\n"
+    "  HR SOFT CHECKS: Is HPI>=3.5 after adjustments? GAP direction? Carry clears park?\n"
+    "  HIT HARD STOPS: wOBA<.270 = disqualify for hits. EV<80 = disqualify for hits.\n"
+    "    EXCEPTION: COLD gap>=+.060 + xwOBA>=.310 overrides wOBA floor — wOBA .240+ is ok.\n"
+    "  CONFIDENCE: Internal <5/10 = NO PICK. 5/10 = list in slot 2 with LOW-CONF caveat.\n"
+    "    6/10+ = confident pick. 7/10+ = core pick. 8/10+ = lock.\n"
+    "  Fail a HARD STOP = drop it. Everything else = list it with honest confidence.\n\n"
 
     "DATA RULES: Every number from pre-computed context only. No substitutions. "
     "GAP=xwOBA-wOBA. Positive=COLD. Negative=HOT. [PROXY]=no 2026 data, max B.\n\n"
