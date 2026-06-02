@@ -351,7 +351,7 @@ def _download_csvs():
         ('custom_pitchers.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=pitcher&filter=&min=1'
-         f'&selections=p_flyball,p_groundball,p_total_bip,p_home_run,p_ab'
+         f'&selections=p_flyball,p_groundball,p_total_bip,p_home_run,p_ab,groundballs_percent'
          f'&chart=false&csv=true'),
         # Custom batter stats  -  fly ball %, ground ball %, ISO components
         ('custom_batters.csv',
@@ -773,6 +773,18 @@ def fetch_one_player(info, cache=None):
             result['fly_ball_pct'] = row.get('mlb_fb_pct')
         if result['ground_ball_pct'] is None and row.get('mlb_gb_pct'):
             result['ground_ball_pct'] = row.get('mlb_gb_pct')
+        # Fallback: groundballs_percent from existing working custom URL
+        # Estimate fly_ball_pct = 100 - groundballs_percent - 28 (avg LD+popup%)
+        if result['ground_ball_pct'] is None:
+            gb_from_existing = g(row, 'groundballs_percent', 'groundball_percent', 'ground_ball_percent')
+            if gb_from_existing:
+                result['ground_ball_pct'] = gb_from_existing
+        if result['fly_ball_pct'] is None and result['ground_ball_pct']:
+            # Rough estimate: LD (~20%) + popup (~8%) = ~28% of BIP
+            # fly_ball_pct = 100 - gb_pct - 28
+            est_fb = round(100 - result['ground_ball_pct'] - 28, 1)
+            if est_fb > 0:
+                result['fly_ball_pct'] = est_fb
         if result['xwoba'] is not None:
             result['data_source']  = 'leaderboard'
             result['fetch_status'] = 'ok'
@@ -811,6 +823,17 @@ def fetch_all_parallel(players, workers=12, cache=None):
     no_data = [r.get('name','?') for r in results if r.get('fetch_status') == 'found/no stats']
     if no_data:
         print(f"[STATS] No 2026 data (PROXY): {', '.join(no_data)}")
+
+    # Pre-compute HPI for batters so it appears in the statcast table
+    for r in results:
+        if r.get('role') == 'BATTER' and r.get('fetch_status') in ('ok', 'found/no stats'):
+            try:
+                _, breakdown, _, _ = compute_batter_score(r)
+                if 'HPI=' in breakdown:
+                    r['hpi'] = float(breakdown.split('HPI=')[1].split('/')[0])
+            except Exception:
+                pass
+
     return results
 
 # ─── WEATHER ─────────────────────────────────────────────────────────────────
