@@ -351,13 +351,13 @@ def _download_csvs():
         ('custom_pitchers.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=pitcher&filter=&min=1'
-         f'&selections=p_fly_ball,p_ground_ball,p_total_bip,p_home_run,p_ab'
+         f'&selections=p_flyball,p_groundball,p_total_bip,p_home_run,p_ab'
          f'&chart=false&csv=true'),
         # Custom batter stats  -  fly ball %, ground ball %, ISO components
         ('custom_batters.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=batter&filter=&min=1'
-         f'&selections=b_fly_ball,b_ground_ball,b_total_pa,b_home_run,b_ab,b_slg_percent,b_batting_average'
+         f'&selections=b_flyball,b_groundball,b_total_bip,b_home_run,b_ab,b_iso'
          f'&chart=false&csv=true'),
     ]
     for filename, url in urls:
@@ -542,12 +542,12 @@ def load_stats_cache():
         ('pitcher', 'custom_pitchers.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=pitcher&filter=&min=1'
-         f'&selections=p_fly_ball,p_ground_ball,p_total_bip,p_home_run,p_ab'
+         f'&selections=p_flyball,p_groundball,p_total_bip,p_home_run,p_ab'
          f'&chart=false&csv=true'),
         ('batter', 'custom_batters.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=batter&filter=&min=1'
-         f'&selections=b_fly_ball,b_ground_ball,b_total_pa,b_home_run,b_ab,b_slg_percent,b_batting_average'
+         f'&selections=b_flyball,b_groundball,b_total_bip,b_home_run,b_ab,b_iso'
          f'&chart=false&csv=true'),
     ]:
         try:
@@ -747,8 +747,8 @@ def fetch_one_player(info, cache=None):
         result['avg_hr_dist']   = g(row, 'avg_hr_distance')
         result['max_hit_speed'] = sane('exit_velocity', g(row, 'max_hit_speed'))
         # New fields from custom Savant CSV (pitcher)
-        p_fb  = g(row, 'p_fly_ball', 'fly_balls')
-        p_gb  = g(row, 'p_ground_ball', 'ground_balls')
+        p_fb  = g(row, 'p_flyball', 'fly_balls', 'flyBalls')
+        p_gb  = g(row, 'p_groundball', 'ground_balls', 'groundBalls')
         p_bip = g(row, 'p_total_bip', 'total_bip')
         if p_fb and p_bip and p_bip > 0:
             result['fly_ball_pct']    = round(100 * p_fb / p_bip, 1)
@@ -757,15 +757,22 @@ def fetch_one_player(info, cache=None):
         # hr_per_9 from MLB Stats API merge
         result['hr_per_9'] = g(row, 'hr_per_9', 'homeRunsPer9')
         # New fields from custom Savant CSV (batter)
-        b_fb  = g(row, 'b_fly_ball', 'fly_balls')
-        b_bip = g(row, 'b_total_pa', 'total_pa', 'p_total_bip')
+        b_fb  = g(row, 'b_flyball', 'fly_balls', 'flyBalls')
+        b_bip = g(row, 'b_total_bip', 'b_total_pa', 'total_bip')
         if b_fb and b_bip and b_bip > 0:
             result['batter_fb_pct'] = round(100 * b_fb / b_bip, 1)
-        # ISO = SLG - AVG (from custom batter CSV)
-        slg = g(row, 'b_slg_percent', 'slg_percent', 'slg')
-        avg = g(row, 'b_batting_average', 'batting_average', 'ba')
-        if slg and avg:
-            result['iso'] = round(slg - avg, 3)
+        # ISO directly from Savant custom CSV (b_iso field)
+        result['iso'] = g(row, 'b_iso', 'iso')
+        if result['iso'] is None:
+            slg = g(row, 'b_slg_percent', 'slg_percent', 'slg')
+            avg = g(row, 'b_batting_average', 'batting_average', 'ba')
+            if slg and avg:
+                result['iso'] = round(slg - avg, 3)
+        # Pull mlb_fb_pct from MLB Stats API merge if custom CSV didn't have it
+        if result['fly_ball_pct'] is None and row.get('mlb_fb_pct'):
+            result['fly_ball_pct'] = row.get('mlb_fb_pct')
+        if result['ground_ball_pct'] is None and row.get('mlb_gb_pct'):
+            result['ground_ball_pct'] = row.get('mlb_gb_pct')
         if result['xwoba'] is not None:
             result['data_source']  = 'leaderboard'
             result['fetch_status'] = 'ok'
