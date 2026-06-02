@@ -43,6 +43,12 @@ PITCHER GATE (suppression score, 0-4 pts):
   GB-EV<=81=soft-grounders-suppressor(closes gate half step)
   GB-EV>=90=hard-grounders-danger(batters squaring up)
   Pitcher EV50<=77=PLUS-soft-contact | EV50<=74=ELITE | EV50>=84=below-avg | EV50>=87=DANGER
+  PITCHER HR VULNERABILITY (when provided — use this to adjust gate):
+    HR/9>=1.5=HIGH-HR-RISK(opens gate) | HR/9>=1.8=ELITE-HR-RISK(bet HR hard)
+    HR/9<=0.8=HR-SUPPRESSOR(adds half-step gate close)
+    FlyBall%>=40%=FLY-BALL-PITCHER(extreme HR vulnerable, keeps gate open even if contact ok)
+    GroundBall%>=55%=GROUNDER-PITCHER(suppresses HR regardless of gate score)
+    HR/FB>15%=above-average HR rate | HR/FB<7%=LUCKY(regression due, more HRs coming)
 
 BATTER GRADE (0-4 pts):
   Barrel%>=15 | xwOBA>=.350 | EV>=91 | HH%>=50 = 1pt each
@@ -58,7 +64,14 @@ CONTACT METRICS (all from statcast CSV, calibrated to real 2026 distributions):
 
 PLATOON: LHB vs RHP=fav | RHB vs LHP=fav | Switch=fav | Same-side=-0.5 HPI (NOT grade drop, NOT veto)
 GAP: xwOBA-wOBA. Positive=COLD(buy). Negative=HOT(fade for HR, good for hits).
-PARKS: BOOSTER=Yankee/GABP/CBP/Coors/Sutter | SUPPRESSOR=Comerica/Petco/Oracle/T-Mobile
+PARKS (2026 HR park factors — use these over generic BOOSTER/SUPPRESSOR labels):
+  ELITE BOOSTER >1.20: GABP-Cincinnati=1.35 | Coors=1.30 | Yankee=1.28 | CBP-Philly=1.22
+  BOOSTER 1.10-1.20: Camden-Yards=1.20 | Fenway=1.12 | Dodger=1.10
+  SLIGHT BOOST 1.00-1.10: Kauffman=1.05(walls moved in 2026-was suppressor) | Wrigley=1.03
+  NEUTRAL 0.90-1.00: AmFam | Globe-Life | Chase-Field | Truist | Busch
+  SUPPRESSOR 0.75-0.90: Comerica=0.88 | Tropicana=0.87 | T-Mobile=0.85
+  ELITE SUPPRESSOR <0.75: PNC-Pittsburgh=0.66 | Petco=0.78 | Oracle-SF=0.72
+  NOTE: Kauffman moved walls in for 2026 — no longer a suppressor. Market may not know.
 DOMES(no weather): AmFam/Tropicana/Globe Life/Chase Field
 WEATHER: >=85F=boost | <=50F=suppress | <=45F=hard suppress
 
@@ -206,6 +219,17 @@ SYSTEM_PROMPT = (
     "1. [Name] ([Team]) | [odds] | SIGNALS: [every signal] | [2 sentences]\n"
     "2. [Name] ([Team]) | [odds] | SIGNALS: [every signal] | [2 sentences]\n\n"
     "NO SLEEPER rule: if no real edge exists write: NO SLEEPER - no mispriced edge here.\n\n"
+    "MONEYLINE PICK:\n"
+    "[Team] ML | [odds] | [2 sentences — pitching mismatch, platoon advantage, bullpen, wind]\n"
+    "OR: NO ML EDGE — factors split, no confident side.\n\n"
+    "TOTALS PICK:\n"
+    "OVER/UNDER [line] | [odds] | [2 sentences — pitcher gates, lineup xwOBA, wind impact, temp]\n"
+    "OR: NO TOTALS EDGE — factors split, no confident side.\n\n"
+    "ML/TOTALS RULES: Only pick when 3+ factors clearly align. Never force. "
+    "Wind blowing OUT 8mph+ at outdoor park = meaningful OVER lean. "
+    "Wind blowing IN 8mph+ = meaningful UNDER lean. "
+    "Pitching mismatch (xwOBA gap >0.050 between starters) = ML lean to better pitcher's team. "
+    "Bullpen ERA >5.50 for one team = late inning runs coming.\n\n"
     + LOCKED_RULES
 )
 
@@ -323,6 +347,18 @@ def _download_csvs():
         ('expected_pitchers.csv',
          f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
          f'?type=pitcher&year={CURRENT_YEAR}&position=&team=&min=1&csv=true'),
+        # Custom pitcher stats  -  fly ball %, ground ball %, HR count
+        ('custom_pitchers.csv',
+         f'https://baseballsavant.mlb.com/leaderboard/custom'
+         f'?year={CURRENT_YEAR}&type=pitcher&filter=&min=1'
+         f'&selections=p_fly_ball,p_ground_ball,p_total_bip,p_home_run,p_ab'
+         f'&chart=false&csv=true'),
+        # Custom batter stats  -  fly ball %, ground ball %, ISO components
+        ('custom_batters.csv',
+         f'https://baseballsavant.mlb.com/leaderboard/custom'
+         f'?year={CURRENT_YEAR}&type=batter&filter=&min=1'
+         f'&selections=b_fly_ball,b_ground_ball,b_total_pa,b_home_run,b_ab,b_slg_percent,b_batting_average'
+         f'&chart=false&csv=true'),
     ]
     for filename, url in urls:
         try:
@@ -501,6 +537,66 @@ def load_stats_cache():
             n = pull_endpoint(url, player_type)
             print(f"[STATS CACHE] live expected_stats {player_type}={n}")
 
+    # PASS 3: custom Savant CSVs - fly ball %, ground ball %, HR count, ISO components
+    for player_type, filename, fallback_url in [
+        ('pitcher', 'custom_pitchers.csv',
+         f'https://baseballsavant.mlb.com/leaderboard/custom'
+         f'?year={CURRENT_YEAR}&type=pitcher&filter=&min=1'
+         f'&selections=p_fly_ball,p_ground_ball,p_total_bip,p_home_run,p_ab'
+         f'&chart=false&csv=true'),
+        ('batter', 'custom_batters.csv',
+         f'https://baseballsavant.mlb.com/leaderboard/custom'
+         f'?year={CURRENT_YEAR}&type=batter&filter=&min=1'
+         f'&selections=b_fly_ball,b_ground_ball,b_total_pa,b_home_run,b_ab,b_slg_percent,b_batting_average'
+         f'&chart=false&csv=true'),
+    ]:
+        try:
+            raw = load_local(filename)
+            if raw:
+                n = pull_endpoint_raw(raw, player_type)
+                print(f"[STATS CACHE] {filename}={n} rows")
+            else:
+                n = pull_endpoint(fallback_url, player_type)
+                print(f"[STATS CACHE] live custom {player_type}={n}")
+        except Exception as e:
+            print(f"[STATS CACHE] custom {player_type} SKIP: {e}")
+
+    # PASS 4: MLB Stats API - pitcher HR/9 (merges into existing pitcher entries)
+    try:
+        mlb_url = (f'https://statsapi.mlb.com/api/v1/stats'
+                   f'?stats=season&group=pitching&season={CURRENT_YEAR}'
+                   f'&gameType=R&limit=1000&hydrate=person')
+        raw_json = savant_get(mlb_url, accept_json=True, timeout=20)
+        if raw_json:
+            data = json.loads(raw_json)
+            splits = data.get('stats', [{}])[0].get('splits', []) if data.get('stats') else []
+            merged = 0
+            for split in splits:
+                stat = split.get('stat', {})
+                person = split.get('person', {})
+                full_name = person.get('fullName', '')
+                if not full_name:
+                    continue
+                key = normalize_name(full_name).lower()
+                hr9 = stat.get('homeRunsPer9')
+                ip = stat.get('inningsPitched', '0')
+                hr = stat.get('homeRuns', 0)
+                # Calculate fly ball % if available
+                fb = stat.get('flyBalls', 0)
+                gb = stat.get('groundBalls', 0)
+                total_bip = stat.get('totalBatters', 0)
+                if key in _stats_cache:
+                    if hr9 is not None:
+                        _stats_cache[key]['hr_per_9'] = float(hr9)
+                    if fb and total_bip:
+                        _stats_cache[key]['mlb_fb_pct'] = round(100 * fb / total_bip, 1)
+                    if gb and total_bip:
+                        _stats_cache[key]['mlb_gb_pct'] = round(100 * gb / total_bip, 1)
+                    merged += 1
+            print(f"[STATS CACHE] MLB Stats API pitcher={merged} merged")
+    except Exception as e:
+        print(f"[STATS CACHE] MLB Stats API SKIP: {e}")
+
     print(f"[STATS CACHE] Total players={len(_stats_cache)}")
     with _stats_lock:
         _stats_loaded = True
@@ -589,6 +685,9 @@ def fetch_one_player(info, cache=None):
         'ev50': None, 'sweet_spot_pct': None,
         'fbld_ev': None, 'gb_ev': None,
         'avg_hr_dist': None, 'max_hit_speed': None,
+        'fly_ball_pct': None, 'ground_ball_pct': None,
+        'hr_per_9': None, 'batter_fb_pct': None,
+        'iso': None,
         'gap': None, 'fetch_status': 'not found', 'data_source': None,
     }
     if not name:
@@ -647,6 +746,26 @@ def fetch_one_player(info, cache=None):
         result['gb_ev']         = sane('exit_velocity', g(row, 'gb'))  # GB exit velocity (separate from GB rate)
         result['avg_hr_dist']   = g(row, 'avg_hr_distance')
         result['max_hit_speed'] = sane('exit_velocity', g(row, 'max_hit_speed'))
+        # New fields from custom Savant CSV (pitcher)
+        p_fb  = g(row, 'p_fly_ball', 'fly_balls')
+        p_gb  = g(row, 'p_ground_ball', 'ground_balls')
+        p_bip = g(row, 'p_total_bip', 'total_bip')
+        if p_fb and p_bip and p_bip > 0:
+            result['fly_ball_pct']    = round(100 * p_fb / p_bip, 1)
+        if p_gb and p_bip and p_bip > 0:
+            result['ground_ball_pct'] = round(100 * p_gb / p_bip, 1)
+        # hr_per_9 from MLB Stats API merge
+        result['hr_per_9'] = g(row, 'hr_per_9', 'homeRunsPer9')
+        # New fields from custom Savant CSV (batter)
+        b_fb  = g(row, 'b_fly_ball', 'fly_balls')
+        b_bip = g(row, 'b_total_pa', 'total_pa', 'p_total_bip')
+        if b_fb and b_bip and b_bip > 0:
+            result['batter_fb_pct'] = round(100 * b_fb / b_bip, 1)
+        # ISO = SLG - AVG (from custom batter CSV)
+        slg = g(row, 'b_slg_percent', 'slg_percent', 'slg')
+        avg = g(row, 'b_batting_average', 'batting_average', 'ba')
+        if slg and avg:
+            result['iso'] = round(slg - avg, 3)
         if result['xwoba'] is not None:
             result['data_source']  = 'leaderboard'
             result['fetch_status'] = 'ok'
@@ -728,6 +847,83 @@ DOME_PARKS = {
     'Rogers Centre', 'LoanDepot Park',
 }
 
+# Center field compass bearing = direction you look FROM home plate TO center field
+# Wind blowing OUT = wind coming from BEHIND home plate, blowing toward CF
+# e.g. Wrigley CF is to the NE (about 45deg). Famous "blowing out" = SW wind (225) blows toward NE
+PARK_CF_BEARING = {
+    'Yankee Stadium':           45,   # CF is to NE from home plate
+    'Fenway Park':              340,  # CF is to NNW (center field gap)
+    'Wrigley Field':            45,   # CF is to NE; E/NE winds blow OUT
+    'Citizens Bank Park':       10,   # CF is to N/NNE
+    'Coors Field':              350,  # CF is to N/NNW
+    'Oracle Park':              310,  # CF is to NW (winds off bay = crosswind)
+    'Petco Park':               340,  # CF is to NNW
+    'Dodger Stadium':           330,  # CF is to NNW
+    'Comerica Park':            350,  # CF is to N
+    'Great American Ball Park': 340,  # CF is to NNW
+    'Nationals Park':           340,  # CF is to NNW
+    'Busch Stadium':            345,  # CF is to NNW
+    'Truist Park':              350,  # CF is to N
+    'PNC Park':                 330,  # CF is to NNW
+    'Citi Field':               350,  # CF is to N
+    'Kauffman Stadium':         340,  # CF is to NNW
+    'Target Field':             335,  # CF is to NNW
+    'T-Mobile Park':            320,  # CF is to NW
+    'Angel Stadium':            330,  # CF is to NNW
+    'Progressive Field':        340,  # CF is to NNW
+    'Camden Yards':             340,  # CF is to NNW
+    'Rate Field':               340,  # CF is to NNW
+    'Guaranteed Rate Field':    340,
+    'Daikin Park':              330,
+    'Sutter Health Park':       330,  # CF to NNW; famous gusty W wind = crosswind
+    'Minute Maid Park':         340,
+}
+
+def compute_wind_impact(wind_degree, wind_mph, park_name):
+    """
+    Returns dict with wind_dir_label, impact ('OUT'/'IN'/'CROSS'/'CALM'), carry_boost.
+    OUT = wind helping carry toward CF = HR boost
+    IN  = wind against CF = HR suppressor
+    CROSS = wind across field = minimal impact
+    """
+    if wind_mph is None or wind_mph < 3:
+        return {'impact': 'CALM', 'label': 'Calm', 'carry_boost': 0}
+    if wind_degree is None:
+        return {'impact': 'UNKNOWN', 'label': f'{wind_mph}mph unknown direction', 'carry_boost': 0}
+
+    cf_bearing = PARK_CF_BEARING.get(park_name)
+    if cf_bearing is None:
+        return {'impact': 'UNKNOWN', 'label': f'{wind_mph}mph (park bearing unknown)', 'carry_boost': 0}
+
+    # Meteorological convention: wind_degree = direction wind is COMING FROM
+    # Wind blows TOWARD (wind_degree + 180) % 360
+    # "Blowing out" = wind blowing TOWARD outfield = wind coming FROM home plate side
+    # At Wrigley (CF=270/W): wind FROM E (90deg) blows toward W = blows OUT
+    wind_toward = (wind_degree + 180) % 360
+
+    # diff = angle between wind_toward and CF bearing
+    diff = abs(wind_toward - cf_bearing)
+    if diff > 180:
+        diff = 360 - diff
+
+    # diff < 45 = blowing out toward CF, diff > 135 = blowing in from CF
+    if diff <= 45:
+        impact = 'OUT'
+        strength = 'hard' if wind_mph >= 15 else ('moderate' if wind_mph >= 8 else 'light')
+        carry_boost = round(wind_mph * 1.5, 1)  # ~1.5ft per mph blowing out
+        label = f'{wind_mph}mph BLOWING OUT ({strength}) +{carry_boost}ft carry est.'
+    elif diff >= 135:
+        impact = 'IN'
+        strength = 'hard' if wind_mph >= 15 else ('moderate' if wind_mph >= 8 else 'light')
+        carry_boost = round(-wind_mph * 1.2, 1)
+        label = f'{wind_mph}mph BLOWING IN ({strength}) {carry_boost}ft carry est.'
+    else:
+        impact = 'CROSS'
+        carry_boost = 0
+        label = f'{wind_mph}mph crosswind (minimal HR impact)'
+
+    return {'impact': impact, 'label': label, 'carry_boost': carry_boost}
+
 def fetch_weather(park_name):
     if park_name in DOME_PARKS:
         return {'temp_f': None, 'condition': 'Dome/Indoor', 'wind_mph': None,
@@ -740,7 +936,7 @@ def fetch_weather(park_name):
                 coords = v
                 break
 
-    temp_f, wind_mph, condition = None, None, 'Unknown'
+    temp_f, wind_mph, wind_degree, wind_dir_raw, condition = None, None, None, None, 'Unknown'
 
     if coords:
         lat, lon = coords
@@ -773,10 +969,18 @@ def fetch_weather(park_name):
                         break
                 except Exception:
                     pass
-            temp_f    = safe_float(best.get('temperature'))
-            wind_str  = best.get('windSpeed', '0 mph')
-            wind_mph  = safe_float(wind_str.split()[0]) if wind_str else None
-            condition = best.get('shortForecast', 'Unknown')
+            temp_f        = safe_float(best.get('temperature'))
+            wind_str      = best.get('windSpeed', '0 mph')
+            wind_mph      = safe_float(wind_str.split()[0]) if wind_str else None
+            wind_dir_raw  = best.get('windDirection', None)  # e.g. "W", "NNW"
+            condition     = best.get('shortForecast', 'Unknown')
+            # NWS gives compass direction string, convert to degrees
+            COMPASS_TO_DEG = {
+                'N':0,'NNE':22,'NE':45,'ENE':67,'E':90,'ESE':112,'SE':135,'SSE':157,
+                'S':180,'SSW':202,'SW':225,'WSW':247,'W':270,'WNW':292,'NW':315,'NNW':337
+            }
+            if wind_dir_raw in COMPASS_TO_DEG:
+                wind_degree = COMPASS_TO_DEG[wind_dir_raw]
         except Exception:
             pass
 
@@ -789,9 +993,11 @@ def fetch_weather(park_name):
             with urllib.request.urlopen(req, timeout=8) as r:
                 data = json.loads(r.read())
             cur = data['current_condition'][0]
-            temp_f   = safe_float(cur.get('temp_F'))
-            wind_mph = safe_float(cur.get('windspeedMiles'))
-            condition = cur.get('weatherDesc', [{}])[0].get('value', 'Unknown')
+            temp_f       = safe_float(cur.get('temp_F'))
+            wind_mph     = safe_float(cur.get('windspeedMiles'))
+            wind_degree  = safe_float(cur.get('winddirDegree'))  # wttr.in provides this
+            wind_dir_raw = cur.get('winddir16Point', None)
+            condition    = cur.get('weatherDesc', [{}])[0].get('value', 'Unknown')
         except Exception:
             pass
 
@@ -815,9 +1021,16 @@ def fetch_weather(park_name):
     if wind_mph and wind_mph >= 15:
         notes.append(f'Wind {wind_mph}mph  -  check direction')
 
+    # Compute wind impact (blowing out/in/cross)
+    wind_impact = compute_wind_impact(wind_degree, wind_mph, park_name)
+    if wind_impact['impact'] != 'CALM' and wind_mph and wind_mph >= 5:
+        notes.append(f'WIND: {wind_impact["label"]}')
+
     return {
         'temp_f': temp_f, 'condition': condition,
-        'wind_mph': wind_mph, 'flag': flag,
+        'wind_mph': wind_mph, 'wind_degree': wind_degree,
+        'wind_dir': wind_dir_raw, 'wind_impact': wind_impact,
+        'flag': flag,
         'notes': ' | '.join(notes) if notes else 'No weather impact',
     }
 
@@ -1008,6 +1221,95 @@ def compute_pitcher_gate(p):
     gb_ev = p.get('gb_ev')
     csw  = p.get('csw_pct')
     fbld = p.get('fbld_ev')
+    fb_pct  = p.get('fly_ball_pct')   # NEW: actual fly ball rate
+    gb_pct  = p.get('ground_ball_pct') # NEW: actual ground ball rate
+    hr9  = p.get('hr_per_9')          # NEW: HR/9 from MLB Stats API
+
+    # GATE: measures how DANGEROUS the pitcher is to batters
+    # Score 1pt for each metric showing SUPPRESSED contact (low = good for pitcher)
+    score = sum([
+        1 if (ev  is not None and ev  <= 88.0) else 0,
+        1 if (hh  is not None and hh  <= 38.0) else 0,
+        1 if (xw  is not None and xw  <= 0.310) else 0,
+        1 if (brl is not None and brl <= 7.0)  else 0,
+    ])
+    gate = 'OPEN' if score <= 1 else 'HALF' if score == 2 else 'CLOSED'
+
+    # Fly ball rate override — most important HR predictor for pitchers
+    fb_flag = ''
+    if fb_pct is not None:
+        if fb_pct >= 42:
+            fb_flag = f' FB%={fb_pct}(FLY-BALL-PITCHER->HR-vulnerable)'
+            if gate == 'HALF': gate = 'HALF->OPEN'
+            elif gate == 'CLOSED': gate = 'CLOSED->HALF'
+        elif fb_pct >= 38:
+            fb_flag = f' FB%={fb_pct}(above-avg-fly-balls)'
+        elif fb_pct <= 32:
+            fb_flag = f' FB%={fb_pct}(GROUNDER-PITCHER->HR-safe)'
+            if gate == 'OPEN': gate = 'OPEN->HALF'
+        else:
+            fb_flag = f' FB%={fb_pct}(neutral)'
+
+    # HR/9 override — actual HR rate
+    hr9_flag = ''
+    if hr9 is not None:
+        if hr9 >= 1.8:
+            hr9_flag = f' HR/9={hr9}(ELITE-HR-RISK->bet-HR-hard)'
+            if gate in ('HALF', 'CLOSED', 'HALF->OPEN', 'CLOSED->HALF'):
+                gate = 'OPEN'  # HR/9 1.8+ overrides any gate closure
+        elif hr9 >= 1.4:
+            hr9_flag = f' HR/9={hr9}(HIGH-HR-RISK)'
+            if gate == 'CLOSED': gate = 'HALF'
+        elif hr9 <= 0.7:
+            hr9_flag = f' HR/9={hr9}(HR-SUPPRESSOR)'
+            if gate == 'OPEN': gate = 'OPEN->HALF'
+        else:
+            hr9_flag = f' HR/9={hr9}'
+
+    # Danger flags for context (pitcher being hit hard)
+    danger = []
+    if ev  is not None and ev  >= 92.0: danger.append(f'EV={ev}(DANGER)')
+    if hh  is not None and hh  >= 52.0: danger.append(f'HH%={hh}(DANGER)')
+    if brl is not None and brl >= 16.0: danger.append(f'Brl%={brl}(DANGER)')
+    if xw  is not None and xw  >= 0.370: danger.append(f'xwOBA={xw}(DANGER)')
+
+    # GB-EV modifier
+    gb_flag = ''
+    if gb_ev is not None:
+        if gb_ev <= 81:
+            gb_flag = f' GB-EV={gb_ev}(ELITE-soft-grounders,bot-10%)'
+            if gate == 'OPEN': gate = 'OPEN->HALF'
+            elif gate == 'HALF': gate = 'HALF->CLOSED'
+        elif gb_ev <= 85:
+            gb_flag = f' GB-EV={gb_ev}(soft-contact,bot-25%)'
+        elif gb_ev >= 90:
+            gb_flag = f' GB-EV={gb_ev}(HARD-grounders-danger,top-10%)'
+        else:
+            gb_flag = f' GB-EV={gb_ev}(neutral)'
+
+    # EV50 for pitchers
+    ev50_flag = ''
+    if ev50 is not None:
+        if ev50 <= 74:    ev50_flag = f' EV50={ev50}(ELITE-soft-contact,top-10%)'
+        elif ev50 <= 77:  ev50_flag = f' EV50={ev50}(PLUS-soft-contact,top-25%)'
+        elif ev50 <= 80:  ev50_flag = f' EV50={ev50}(avg-soft-contact)'
+        elif ev50 <= 83:  ev50_flag = f' EV50={ev50}(below-avg,batters-making-contact)'
+        else:             ev50_flag = f' EV50={ev50}(DANGER-hard-contact,bottom-10%)'
+
+    # FB/LD EV
+    fbld_flag = ''
+    if fbld is not None:
+        if fbld >= 95:   fbld_flag = f' FB/LD={fbld}(HARD-fly-balls->HR-risk,top-12%)'
+        elif fbld <= 90: fbld_flag = f' FB/LD={fbld}(SOFT-fly-balls->suppressor,bottom-10%)'
+
+    pts = [
+        f"EV={ev or 'N/A'}{'✓suppress' if ev and ev<=88 else '(hittable)' if ev else ''}",
+        f"HH%={hh or 'N/A'}{'✓suppress' if hh and hh<=38 else '(hittable)' if hh else ''}",
+        f"xwOBA={xw or 'N/A'}{'✓suppress' if xw and xw<=0.310 else '(hittable)' if xw else ''}",
+        f"Brl%={brl or 'N/A'}{'✓suppress' if brl is not None and brl<=7 else '(hittable)' if brl is not None else ''}",
+    ]
+    danger_str = ' DANGER:'+','.join(danger) if danger else ''
+    return score, gate, ' | '.join(pts) + danger_str + fb_flag + hr9_flag + gb_flag + ev50_flag + fbld_flag
 
     # GATE = pitcher suppression score
     # Score 1pt for each metric showing SUPPRESSED contact (low = good for pitcher)
@@ -1211,6 +1513,18 @@ def compute_batter_score(b):
     if ss is not None and ss >= 38:
         hpi += 0.5; hpi_signals.append(f'SS%={ss}(ELITE-LA)')
 
+    # Batter fly ball rate bonus — higher = more HR chances
+    bfb = b.get('batter_fb_pct')
+    if bfb is not None:
+        if bfb >= 48:   hpi += 1.0; hpi_signals.append(f'FB%={bfb}(elite-elevation)')
+        elif bfb >= 40: hpi += 0.5; hpi_signals.append(f'FB%={bfb}(good-elevation)')
+
+    # ISO bonus — raw power, market underweights this
+    iso = b.get('iso')
+    if iso is not None:
+        if iso >= 0.250:  hpi += 1.0; hpi_signals.append(f'ISO={iso}(ELITE-power)')
+        elif iso >= 0.200: hpi += 0.5; hpi_signals.append(f'ISO={iso}(GOOD-power)')
+
     # GAP modifier
     if gap is not None:
         if gap >= 0.100:  hpi += 1.0; hpi_signals.append('COLD-BUY')
@@ -1269,11 +1583,17 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
     away = parsed.get('away_team', '?')
     wx = weather
     temp_str = f"{wx['temp_f']}F" if wx.get('temp_f') else 'N/A'
+    wind_impact = wx.get('wind_impact', {})
+    wind_str = f"{wx.get('wind_mph','N/A')} mph"
+    if wx.get('wind_dir'):
+        wind_str += f" from {wx['wind_dir']}"
+    wind_impact_str = wind_impact.get('label', 'unknown direction') if wind_impact else ''
 
     lines = [
         f"GAME: {away} @ {home}",
         f"PARK: {park_name} [{park_cat}]",
-        f"WEATHER: {temp_str} | {wx.get('condition','N/A')} | Wind {wx.get('wind_mph','N/A')} mph | {wx.get('flag','NEUTRAL')}",
+        f"WEATHER: {temp_str} | {wx.get('condition','N/A')} | Wind {wind_str} | {wx.get('flag','NEUTRAL')}",
+        f"WIND IMPACT: {wind_impact_str}" if wind_impact_str else "WIND IMPACT: unknown",
         f"WEATHER NOTE: {wx.get('notes','')}",
         '',
         'VERIFIED ASSIGNMENTS:',
@@ -1378,6 +1698,13 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
             if brl >= 20 and park_cat == 'BOOSTER' and platoon in ('FAV','FAV(SW)'):
                 u12 = ' [#12:ELITE-BARREL+BOOSTER->B-DART]'
 
+            # Store HPI in batter dict for table display
+            if 'HPI=' in breakdown:
+                try:
+                    b['hpi'] = float(breakdown.split('HPI=')[1].split('/')[0])
+                except:
+                    pass
+
             # Upgrade #14 already in breakdown string if applicable
             lines.append(
                 f"  #{b.get('lineup_pos','?')} {proxy}{b.get('name','?')} ({b.get('hand','?')}HB) | "
@@ -1389,6 +1716,82 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
     lines.append('RULES: Use pre-computed SCORE, GATE, platoon exactly. Do not re-compute.')
     lines.append('HR-CAP-C = max C grade. HR-CAP-B = max B grade. HIT-PICK-YES = include in hits.')
     lines.append('HOT gap = fade HR only, does NOT suppress hit probability.')
+
+    # === ML/TOTALS SECTION ===
+    lines.append('')
+    lines.append('=== MONEYLINE & TOTALS CONTEXT ===')
+
+    # Pitcher quality comparison for ML
+    home_p = next((p for p in all_statcast if p.get('role')=='PITCHER' and p.get('team')==home), None)
+    away_p = next((p for p in all_statcast if p.get('role')=='PITCHER' and p.get('team')==away), None)
+
+    def pitcher_summary(p):
+        if not p: return 'unknown'
+        name = p.get('name','?')
+        xw = p.get('xwoba')
+        ev = p.get('exit_velocity')
+        hh = p.get('hard_hit_pct')
+        hr9 = p.get('hr_per_9')
+        fb = p.get('fly_ball_pct')
+        gb = p.get('ground_ball_pct')
+        gate_s, gate_l, _ = compute_pitcher_gate(p)
+        quality = 'ELITE' if gate_s >= 3 else ('SOLID' if gate_s == 2 else 'HITTABLE')
+        parts = [f"gate={gate_s}/4({quality})"]
+        if xw: parts.append(f"xwOBA={xw:.3f}")
+        if ev:  parts.append(f"EV-allowed={ev}")
+        if hr9: parts.append(f"HR/9={hr9}")
+        if fb:  parts.append(f"FB%={fb}")
+        if gb:  parts.append(f"GB%={gb}")
+        return f"{name}: {' | '.join(parts)}"
+
+    lines.append(f"  HOME pitcher ({home}): {pitcher_summary(home_p)}")
+    lines.append(f"  AWAY pitcher ({away}): {pitcher_summary(away_p)}")
+
+    # Lineup quality for totals
+    for team, opp_pitcher_p in [(home, away_p), (away, home_p)]:
+        opp_hand = opp_pitcher_p.get('hand','R') if opp_pitcher_p else 'R'
+        batters_t = [b for b in all_statcast if b.get('role')=='BATTER' and b.get('team')==team]
+        if not batters_t: continue
+        xwobas = [b.get('xwoba') for b in batters_t if b.get('xwoba')]
+        wobas  = [b.get('woba')  for b in batters_t if b.get('woba')]
+        fav_count = sum(1 for b in batters_t
+                        if compute_platoon(b.get('hand','?'), opp_hand) in ('FAV','FAV(SW)'))
+        cold_count = sum(1 for b in batters_t if (b.get('gap') or 0) > 0.030)
+        avg_xwoba = round(sum(xwobas)/len(xwobas), 3) if xwobas else None
+        avg_woba  = round(sum(wobas)/len(wobas), 3)  if wobas  else None
+        lines.append(
+            f"  {team} lineup vs {opp_hand}HP: avg-xwOBA={avg_xwoba} | avg-wOBA={avg_woba} | "
+            f"FAV-platoon={fav_count}/{len(batters_t)} | COLD-gap-batters={cold_count}"
+        )
+
+    # Bullpen for totals
+    home_pen = pen_era.get(home, {})
+    away_pen = pen_era.get(away, {})
+    lines.append(
+        f"  Bullpen ERA: {home}={home_pen.get('era','?')} ({home_pen.get('tier','?')}) | "
+        f"{away}={away_pen.get('era','?')} ({away_pen.get('tier','?')})"
+    )
+
+    # Wind impact for totals
+    wi = weather.get('wind_impact', {})
+    wi_impact = wi.get('impact','UNKNOWN')
+    wi_label  = wi.get('label','')
+    wi_carry  = wi.get('carry_boost', 0)
+    if wi_impact == 'OUT' and weather.get('wind_mph',0) >= 8:
+        lines.append(f"  WIND: {wi_label} → OVER lean (wind carrying fly balls out)")
+    elif wi_impact == 'IN' and weather.get('wind_mph',0) >= 8:
+        lines.append(f"  WIND: {wi_label} → UNDER lean (wind suppressing fly balls)")
+    else:
+        lines.append(f"  WIND: {wi_label or 'calm/crosswind'} → neutral totals impact")
+
+    lines.append('')
+    lines.append('ML/TOTALS GUIDANCE FOR MARCUS:')
+    lines.append('  Use pitcher gate quality, lineup avg-xwOBA, bullpen ERA, and wind impact.')
+    lines.append('  MONEYLINE edge = clear pitching mismatch + platoon advantage + bullpen edge.')
+    lines.append('  OVER edge = both pitchers hittable (gate 0-1) + wind OUT 8mph+ + warm temp + weak pens.')
+    lines.append('  UNDER edge = both pitchers elite (gate 2+) + wind IN 8mph+ + cold + strong pens.')
+    lines.append('  Only give ML/Totals picks when 3+ factors align. One factor is never enough.')
+
     return '\n'.join(lines)
 
 # ─── MAIN JOB ────────────────────────────────────────────────────────────────
@@ -1426,7 +1829,11 @@ def run_job(jid, sid, raw_lineup, game_date=None):
             jobs[jid]['park_confirm'] = {
                 'park': park_name, 'category': park_cat,
                 'temp_f': weather['temp_f'], 'condition': weather['condition'],
-                'wind_mph': weather['wind_mph'], 'weather_flag': weather['flag'],
+                'wind_mph': weather['wind_mph'],
+                'wind_dir': weather.get('wind_dir'),
+                'wind_impact': weather.get('wind_impact', {}).get('impact','UNKNOWN'),
+                'wind_label': weather.get('wind_impact', {}).get('label',''),
+                'weather_flag': weather['flag'],
                 'notes': weather.get('notes', ''),
             }
             jobs[jid]['bullpen'] = pen_era
@@ -1472,18 +1879,22 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         slim_statcast = []
         for p in all_statcast:
             slim_statcast.append({
-                'name':           p.get('name'),
-                'role':           p.get('role'),
-                'team':           p.get('team'),
-                'barrel_pct':     p.get('barrel_pct'),
-                'exit_velocity':  p.get('exit_velocity'),
-                'ev50':           p.get('ev50'),
-                'hard_hit_pct':   p.get('hard_hit_pct'),
-                'xwoba':          p.get('xwoba'),
-                'woba':           p.get('woba'),
-                'gap':            p.get('gap'),
-                'sweet_spot_pct': p.get('sweet_spot_pct'),
-                'fetch_status':   p.get('fetch_status'),
+                'name':             p.get('name'),
+                'role':             p.get('role'),
+                'team':             p.get('team'),
+                'barrel_pct':       p.get('barrel_pct'),
+                'exit_velocity':    p.get('exit_velocity'),
+                'ev50':             p.get('ev50'),
+                'hard_hit_pct':     p.get('hard_hit_pct'),
+                'xwoba':            p.get('xwoba'),
+                'woba':             p.get('woba'),
+                'gap':              p.get('gap'),
+                'sweet_spot_pct':   p.get('sweet_spot_pct'),
+                'fly_ball_pct':     p.get('fly_ball_pct') or p.get('batter_fb_pct'),
+                'iso':              p.get('iso'),
+                'hr_per_9':         p.get('hr_per_9'),
+                'hpi':              p.get('hpi'),
+                'fetch_status':     p.get('fetch_status'),
             })
 
         # Write statcast immediately so UI can show it while analysis runs
@@ -1599,9 +2010,10 @@ tr.pitcher-row td{background:#06090f}
         <thead><tr>
           <th>Player</th><th>Role</th><th>Team</th>
           <th>BRL%</th><th>EV</th><th>EV50</th><th>HH%</th>
-          <th>xwOBA</th><th>wOBA</th><th>GAP</th><th>SS%</th><th>OK</th>
+          <th>xwOBA</th><th>wOBA</th><th>GAP</th><th>SS%</th>
+          <th>FB%</th><th>ISO</th><th>HR/9</th><th>HPI</th><th>OK</th>
         </tr></thead>
-        <tbody id="statBody"><tr><td colspan="12" class="na" style="padding:20px;text-align:center">Run a lineup to populate</td></tr></tbody>
+        <tbody id="statBody"><tr><td colspan="16" class="na" style="padding:20px;text-align:center">Run a lineup to populate</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -1762,13 +2174,17 @@ function showStats(stats){
           <td>${fw(p.woba)}</td>
           <td class="${gc}">${gap}</td>
           <td>${fv(p.sweet_spot_pct,38)}</td>
+          <td>${p.fly_ball_pct!=null?p.fly_ball_pct.toFixed(1):'<span class="na">-</span>'}</td>
+          <td>${p.iso!=null?p.iso.toFixed(3):'<span class="na">-</span>'}</td>
+          <td>${p.role==='PITCHER'&&p.hr_per_9!=null?p.hr_per_9.toFixed(2):'<span class="na">-</span>'}</td>
+          <td>${p.hpi!=null?p.hpi.toFixed(1):'<span class="na">-</span>'}</td>
           <td>${p.fetch_status==='ok'?'OK':'!'}</td>
         </tr>`;
       }catch(e){
-        return`<tr><td colspan="12" style="color:#ef4444">${p.name||'?'} - render error</td></tr>`;
+        return`<tr><td colspan="16" style="color:#ef4444">${p.name||'?'} - render error</td></tr>`;
       }
     }).join('');
-    document.getElementById('statBody').innerHTML=rows||'<tr><td colspan="12">No data</td></tr>';
+    document.getElementById('statBody').innerHTML=rows||'<tr><td colspan="16">No data</td></tr>';
   } catch(e) {
     document.getElementById('statBody').innerHTML=`<tr><td colspan="12" style="color:#ef4444">Error: ${e.message}</td></tr>`;
   }
