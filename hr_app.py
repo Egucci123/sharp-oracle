@@ -348,7 +348,7 @@ def call_claude(messages, system=None, max_tokens=4096):
         method='POST'
     )
     try:
-        with urllib.request.urlopen(req, timeout=90) as r:
+        with urllib.request.urlopen(req, timeout=180) as r:
             data = json.loads(r.read())
             return data['content'][0]['text']
     except Exception as e:
@@ -2213,7 +2213,7 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         analysis = call_claude(
             [{'role': 'user', 'content': ctx}],
             system=SYSTEM_PROMPT,
-            max_tokens=8000
+            max_tokens=4000
         )
         with store_lock:
             jobs[jid]['result'] = analysis
