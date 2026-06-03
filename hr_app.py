@@ -1193,7 +1193,7 @@ def fetch_recent_form(player_id, role='batter', days=14):
                f'?stats=lastXGames&group={group}&gameType=R&lastXGames={days}&season={CURRENT_YEAR}')
         req = urllib.request.Request(url,
               headers={'User-Agent': 'SharpOracle/1.0', 'Accept': 'application/json'})
-        with urllib.request.urlopen(req, timeout=6) as r:
+        with urllib.request.urlopen(req, timeout=3) as r:
             data = json.loads(r.read())
         splits = []
         for sg in data.get('stats', []):
@@ -2100,21 +2100,37 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         batter_stats  = fetch_all_parallel(batter_list, workers=2, cache=cache)
         all_statcast  = pitcher_stats + batter_stats
 
-        # Fetch recent form (last 14 days) for all players in parallel
-        # Completely non-blocking — failures return None silently
+        # Fetch recent form (last 14 days) — only for batters 1-6 and pitchers
+        # Limit scope to avoid timeout on full roster
         def _fetch_form(player):
-            pname = normalize_name(player.get('name', '')).lower()
-            crow = cache.get(pname, {})
-            pid = crow.get('player_id')
-            if not pid:
+            try:
+                pname = normalize_name(player.get('name', '')).lower()
+                crow = cache.get(pname, {})
+                pid = crow.get('player_id')
+                if not pid:
+                    return None
+                pos = player.get('lineup_pos', 99)
+                role = player.get('role', 'BATTER')
+                # Only fetch for pitchers and top 6 batters to keep it fast
+                if role == 'BATTER' and pos > 6:
+                    return None
+                form = fetch_recent_form(pid, role='pitcher' if role == 'PITCHER' else 'batter', days=14)
+                return (player.get('name'), form)
+            except Exception:
                 return None
-            role = 'pitcher' if player.get('role') == 'PITCHER' else 'batter'
-            form = fetch_recent_form(pid, role=role, days=14)
-            return (player.get('name'), form)
 
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
-                form_results = list(ex.map(_fetch_form, all_statcast))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+                form_futures = {ex.submit(_fetch_form, p): p for p in all_statcast}
+                form_results = []
+                import concurrent.futures as _cf
+                for future in _cf.as_completed(form_futures, timeout=12):
+                    try:
+                        result = future.result(timeout=2)
+                        if result:
+                            form_results.append(result)
+                    except Exception:
+                        pass
             recent_form = {name: form for name, form in form_results
                           if name and form is not None}
             print(f"[RECENT FORM] Got {len(recent_form)}/{len(all_statcast)} players")
