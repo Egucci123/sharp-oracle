@@ -21,7 +21,7 @@ from urllib.parse import urlparse, parse_qs
 CURRENT_YEAR = 2026
 PORT = int(os.environ.get('PORT', 8080))
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
-MODEL = 'claude-haiku-4-5-20251001'
+MODEL = 'claude-sonnet-4-5-20251001'
 
 _HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
@@ -189,9 +189,9 @@ SYSTEM_PROMPT = (
     "  HR SOFT CHECKS: Is HPI>=3.5 after adjustments? GAP direction? Carry clears park?\n"
     "  HIT HARD STOPS: wOBA<.270 = disqualify for hits. EV<80 = disqualify for hits.\n"
     "    EXCEPTION: COLD gap>=+.060 + xwOBA>=.310 overrides wOBA floor — wOBA .240+ is ok.\n"
-    "  CONFIDENCE: Internal <5/10 = NO PICK. 5/10 = list in slot 2 with LOW-CONF caveat.\n"
-    "    6/10+ = confident pick. 7/10+ = core pick. 8/10+ = lock.\n"
-    "  Fail a HARD STOP = drop it. Everything else = list it with honest confidence.\n\n"
+    "  CONFIDENCE: Use adjusted HPI ONLY — no subjective confidence scoring.\n"
+    "    Adj HPI>=5.5 = TOP 2 pick. Adj HPI 4.0-5.4 = B-grade/sleeper. Adj HPI<4.0 = fade.\n"
+    "  Fail a HARD STOP = drop it. Everything else = list it with honest grade.\n\n"
 
     "DATA RULES: Every number from pre-computed context only. No substitutions. "
     "GAP=xwOBA-wOBA. Positive=COLD. Negative=HOT. [PROXY]=no 2026 data, max B.\n\n"
@@ -203,9 +203,8 @@ SYSTEM_PROMPT = (
     "NEVER fill a slot with a player you are fading — that wastes the slot and confuses the bet. "
     "If only 1 HR candidate clears scrutiny, list 1 HR pick and write "
     "'NO SECOND HR PICK — [reason]' for slot 2.\n"
-    "CONFIDENCE ORDERING: If a sleeper has higher internal confidence than a core pick candidate, "
-    "PROMOTE the sleeper to the core section and move the lower-confidence pick to sleeper or drop it. "
-    "Internal confidence <6/10 = NO PICK regardless of which section. Never put a 5/10 pick in TOP 2.\n\n"
+    "ORDERING: If a sleeper has higher adjusted HPI than a core pick candidate, "
+    "PROMOTE the sleeper to the core section. Core picks = adjusted HPI>=5.5. Sleepers = 4.0-5.4.\n\n"
     "TOP 2 HR BETS:\n"
     "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sentences — exact metrics, temp-adjusted carry, the specific edge]\n"
     "2. [Name] ([Team]) | Grade: [X] | [odds] | [2 sentences]\n\n"
@@ -226,10 +225,12 @@ SYSTEM_PROMPT = (
     "OVER/UNDER [line] | [odds] | [2 sentences — pitcher gates, lineup xwOBA, wind impact, temp]\n"
     "OR: NO TOTALS EDGE — factors split, no confident side.\n\n"
     "ML/TOTALS RULES: Only pick when 3+ factors clearly align. Never force. "
+    "MONEYLINE factors: starter xwOBA gap >0.050 | bullpen tier edge | team run differential gap >20 | "
+    "active win streak 4+ | home field. "
     "Wind blowing OUT 8mph+ at outdoor park = meaningful OVER lean. "
     "Wind blowing IN 8mph+ = meaningful UNDER lean. "
-    "Pitching mismatch (xwOBA gap >0.050 between starters) = ML lean to better pitcher's team. "
-    "Bullpen ERA >5.50 for one team = late inning runs coming.\n\n"
+    "Bullpen ERA UNKNOWN = skip ML, only pick Totals if 2+ other factors align. "
+    "Team on W4+ streak with positive run differential = lean toward them on ML.\n\n"
     + LOCKED_RULES
 )
 
@@ -1119,6 +1120,7 @@ TEAM_IDS = {
 }
 
 def fetch_bullpen_era(team_name):
+    """Fetch bullpen ERA from MLB Stats API (reliable, free, no scraping)."""
     key = normalize_name(team_name).lower()
     team_id = None
     for k, v in TEAM_IDS.items():
@@ -1128,7 +1130,32 @@ def fetch_bullpen_era(team_name):
     if not team_id:
         return {'era': None, 'tier': 'UNKNOWN'}
 
-    # Try covers.com bullpen stats page
+    try:
+        # MLB Stats API: team bullpen stats (pitchers with 0 GS / relief appearances)
+        url = (f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats'
+               f'?stats=season&group=pitching&season={CURRENT_YEAR}&gameType=R')
+        req = urllib.request.Request(url, headers={'User-Agent': 'SharpOracle/1.0', 'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+
+        # Team pitching stats — extract ERA and use team ERA as proxy for bullpen quality
+        for stat_group in data.get('stats', []):
+            splits = stat_group.get('splits', [])
+            for split in splits:
+                stat = split.get('stat', {})
+                era = stat.get('era')
+                if era:
+                    try:
+                        era_f = float(era)
+                        if 0 < era_f < 15:
+                            tier = 'WEAK' if era_f >= 5.50 else 'AVERAGE' if era_f >= 4.50 else 'SOLID' if era_f >= 3.50 else 'ELITE'
+                            return {'era': round(era_f, 2), 'tier': tier}
+                    except Exception:
+                        pass
+    except Exception as e:
+        print(f"[BULLPEN] MLB Stats API failed for {team_name}: {e}")
+
+    # Fallback: covers.com scrape
     COVERS_ABBREVS = {
         'angels': 'LAA', 'astros': 'HOU', 'athletics': 'OAK', 'blue jays': 'TOR',
         'braves': 'ATL', 'brewers': 'MIL', 'cardinals': 'STL', 'cubs': 'CHC',
@@ -1139,56 +1166,25 @@ def fetch_bullpen_era(team_name):
         'rockies': 'COL', 'royals': 'KC', 'tigers': 'DET', 'twins': 'MIN',
         'white sox': 'CWS', 'yankees': 'NYY',
     }
-    abbrev = None
-    for k, v in COVERS_ABBREVS.items():
-        if k in key or key in k:
-            abbrev = v
-            break
-
-    # Try covers.com
+    abbrev = next((v for k, v in COVERS_ABBREVS.items() if k in key or key in k), None)
     if abbrev:
         try:
-            url = f'https://www.covers.com/sport/baseball/mlb/statistics/team-bullpenera/{CURRENT_YEAR}'
-            req = urllib.request.Request(url, headers=_HEADERS)
-            with urllib.request.urlopen(req, timeout=10) as r:
-                html = r.read().decode('utf-8', errors='replace')
-            # Find the team row
-            pattern = rf'{abbrev}[^<]*</[^>]+>[^<]*<[^>]+>([0-9]+\.[0-9]+)'
-            m = re.search(pattern, html)
-            if not m:
-                # Try broader search near abbrev
-                idx = html.find(f'>{abbrev}<')
-                if idx == -1:
-                    idx = html.find(f'">{abbrev}')
-                if idx > 0:
-                    snippet = html[idx:idx+200]
-                    nm = re.search(r'([0-9]+\.[0-9]+)', snippet)
-                    if nm:
-                        era = safe_float(nm.group(1))
-                        if era and 0 < era < 10:
-                            tier = 'WEAK' if era >= 5.50 else 'AVERAGE' if era >= 4.50 else 'SOLID'
-                            return {'era': round(era, 2), 'tier': tier}
+            url2 = f'https://www.covers.com/sport/baseball/mlb/statistics/team-bullpenera/{CURRENT_YEAR}'
+            req2 = urllib.request.Request(url2, headers=_HEADERS)
+            with urllib.request.urlopen(req2, timeout=10) as r2:
+                html = r2.read().decode('utf-8', errors='replace')
+            idx = html.find(f'>{abbrev}<')
+            if idx == -1:
+                idx = html.find(f'">{abbrev}')
+            if idx > 0:
+                nm = re.search(r'([0-9]+\.[0-9]+)', html[idx:idx+200])
+                if nm:
+                    era = safe_float(nm.group(1))
+                    if era and 0 < era < 10:
+                        tier = 'WEAK' if era >= 5.50 else 'AVERAGE' if era >= 4.50 else 'SOLID' if era >= 3.50 else 'ELITE'
+                        return {'era': round(era, 2), 'tier': tier}
         except Exception:
             pass
-
-    # Fallback: MLB Stats API
-    for url in [
-        f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats?stats=season&group=pitching&season={CURRENT_YEAR}&gameType=R',
-        f'https://statsapi.mlb.com/api/v1/teams/{team_id}/stats?stats=season&group=pitching&season={CURRENT_YEAR}',
-    ]:
-        try:
-            req = urllib.request.Request(url, headers=_HEADERS)
-            with urllib.request.urlopen(req, timeout=10) as r:
-                data = json.loads(r.read())
-            splits = data.get('stats', [{}])[0].get('splits', [])
-            if splits:
-                era = safe_float(splits[0].get('stat', {}).get('era'))
-                if era and 0 < era < 20:
-                    tier = 'WEAK' if era >= 5.50 else 'AVERAGE' if era >= 4.50 else 'SOLID'
-                    return {'era': round(era, 2), 'tier': tier}
-        except Exception:
-            pass
-    return {'era': None, 'tier': 'UNKNOWN'}
 
 # ─── LINEUP PARSING ──────────────────────────────────────────────────────────
 def parse_lineup(raw, game_date=None):
@@ -1803,6 +1799,34 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
         f"{away}={away_pen.get('era','?')} ({away_pen.get('tier','?')})"
     )
 
+    # Team standings for ML context
+    try:
+        standings_url = (f'https://statsapi.mlb.com/api/v1/standings'
+                         f'?leagueId=103,104&season={CURRENT_YEAR}&standingsTypes=regularSeason')
+        req = urllib.request.Request(standings_url,
+              headers={'User-Agent': 'SharpOracle/1.0', 'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            sdata = json.loads(r.read())
+        team_records = {}
+        for division in sdata.get('records', []):
+            for tr in division.get('teamRecords', []):
+                tname = tr.get('team', {}).get('name', '').lower()
+                wins = tr.get('wins', 0)
+                losses = tr.get('losses', 0)
+                pct = tr.get('winningPercentage', '.000')
+                run_diff = tr.get('runDifferential', 0)
+                streak = tr.get('streak', {}).get('streakCode', '')
+                team_records[tname] = {'w': wins, 'l': losses, 'pct': pct,
+                                       'rdiff': run_diff, 'streak': streak}
+        for team in [home, away]:
+            tkey = normalize_name(team).lower()
+            rec = next((v for k, v in team_records.items() if tkey in k or k in tkey), None)
+            if rec:
+                lines.append(f"  {team} record: {rec['w']}-{rec['l']} ({rec['pct']}) "
+                             f"RunDiff={rec['rdiff']:+d} Streak={rec['streak']}")
+    except Exception:
+        pass
+
     # Wind impact for totals
     wi = weather.get('wind_impact', {})
     wi_impact = wi.get('impact','UNKNOWN')
@@ -1817,10 +1841,12 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
 
     lines.append('')
     lines.append('ML/TOTALS GUIDANCE FOR MARCUS:')
-    lines.append('  Use pitcher gate quality, lineup avg-xwOBA, bullpen ERA, and wind impact.')
-    lines.append('  MONEYLINE edge = clear pitching mismatch + platoon advantage + bullpen edge.')
-    lines.append('  OVER edge = both pitchers hittable (gate 0-1) + wind OUT 8mph+ + warm temp + weak pens.')
-    lines.append('  UNDER edge = both pitchers elite (gate 2+) + wind IN 8mph+ + cold + strong pens.')
+    lines.append('  MONEYLINE: need 3+ of these — starter xwOBA gap >0.050 | bullpen tier gap | team run diff gap >20 | streak (W3+) | home field.')
+    lines.append('  OVER: both pitchers hittable (gate 0-1) + wind OUT 8mph+ + warm temp (>75F) + weak pens (ERA>5.0).')
+    lines.append('  UNDER: both pitchers elite (gate 2+) + wind IN 8mph+ + cold (<55F) + strong pens (ERA<3.50).')
+    lines.append('  Team on W-streak 4+ with positive run diff = meaningful ML lean TOWARD them.')
+    lines.append('  Only pick ML/Totals when 3+ factors clearly align. Never force.')
+    lines.append('  Bullpen ERA UNKNOWN = skip ML pick, only give Totals if other factors align.')
     lines.append('  Only give ML/Totals picks when 3+ factors align. One factor is never enough.')
 
     return '\n'.join(lines)
