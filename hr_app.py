@@ -21,7 +21,7 @@ from urllib.parse import urlparse, parse_qs
 CURRENT_YEAR = 2026
 PORT = int(os.environ.get('PORT', 8080))
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
-MODEL = 'claude-sonnet-4-5-20251001'
+MODEL = 'claude-sonnet-4-5'
 
 _HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
