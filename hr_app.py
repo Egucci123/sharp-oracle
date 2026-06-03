@@ -818,14 +818,22 @@ def fetch_all_parallel(players, workers=12, cache=None):
         print(f"[STATS] No 2026 data (PROXY): {', '.join(no_data)}")
 
     # Pre-compute HPI for batters so it appears in the statcast table
+    hpi_computed = 0
+    hpi_errors = []
     for r in results:
-        if r.get('role') == 'BATTER' and r.get('fetch_status') in ('ok', 'found/no stats'):
+        if r.get('role') == 'BATTER':
             try:
                 _, breakdown, _, _ = compute_batter_score(r)
                 if 'HPI=' in breakdown:
                     r['hpi'] = float(breakdown.split('HPI=')[1].split('/')[0])
-            except Exception:
-                pass
+                    hpi_computed += 1
+                else:
+                    r['hpi'] = 0.0
+            except Exception as e:
+                hpi_errors.append(f"{r.get('name','?')}:{e}")
+                r['hpi'] = 0.0
+    print(f"[HPI] Pre-computed for {hpi_computed}/{sum(1 for r in results if r.get('role')=='BATTER')} batters"
+          + (f" | errors: {hpi_errors[:3]}" if hpi_errors else ""))
 
     return results
 
