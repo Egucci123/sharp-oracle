@@ -561,76 +561,44 @@ def load_stats_cache():
         except Exception as e:
             print(f"[STATS CACHE] custom {player_type} SKIP: {e}")
 
-    # PASS 4: MLB Stats API - pitcher HR/9 and fly ball % (merges into existing pitcher entries)
+    # PASS 4: MLB Stats API - pitcher HR/9, fly ball %, ground ball %
     try:
-        # Use the correct MLB Stats API endpoint with proper hydration
-        mlb_url = (f'https://statsapi.mlb.com/api/v1/stats/leaders'
-                   f'?leaderCategories=homeRunsPer9&season={CURRENT_YEAR}'
-                   f'&leaderGameTypes=R&limit=500&hydrate=person')
-        raw_json = savant_get(mlb_url, accept_json=True, timeout=20)
-        if raw_json:
+        mlb_url = (f'https://statsapi.mlb.com/api/v1/stats'
+                   f'?stats=season&group=pitching&season={CURRENT_YEAR}'
+                   f'&gameType=R&limit=500&sportId=1')
+        raw_json = savant_get(mlb_url, accept_json=True, timeout=25)
+        if raw_json and len(raw_json) > 100:
             data = json.loads(raw_json)
-            leaders = data.get('leagueLeaders', [{}])
             merged = 0
-            for leader_group in leaders:
-                for entry in leader_group.get('leaders', []):
-                    person = entry.get('person', {})
-                    full_name = person.get('fullName', '')
-                    hr9_val = entry.get('value')
-                    if not full_name or hr9_val is None:
+            for stat_group in data.get('stats', []):
+                for split in stat_group.get('splits', []):
+                    stat   = split.get('stat', {})
+                    player = split.get('player', split.get('person', {}))
+                    full_name = player.get('fullName', '')
+                    if not full_name:
                         continue
                     key = normalize_name(full_name).lower()
-                    if key in _stats_cache:
+                    if key not in _stats_cache:
+                        continue
+                    hr9 = stat.get('homeRunsPer9')
+                    fb  = stat.get('flyBalls')  or 0
+                    gb  = stat.get('groundBalls') or 0
+                    tb  = stat.get('totalBatters') or 0
+                    if hr9 is not None:
                         try:
-                            _stats_cache[key]['hr_per_9'] = float(hr9_val)
+                            _stats_cache[key]['hr_per_9'] = round(float(hr9), 2)
                             merged += 1
                         except Exception:
                             pass
-            print(f"[STATS CACHE] MLB Stats API HR/9={merged} merged")
+                    if fb and tb > 0:
+                        _stats_cache[key]['mlb_fb_pct'] = round(100 * fb / tb, 1)
+                    if gb and tb > 0:
+                        _stats_cache[key]['mlb_gb_pct'] = round(100 * gb / tb, 1)
+            print(f"[STATS CACHE] MLB Stats API pitcher={merged} merged")
         else:
-            # Fallback: use team stats endpoint which is more reliable
-            for team_id in range(108, 148):
-                pass  # skip if primary fails
+            print(f"[STATS CACHE] MLB Stats API no response or empty")
     except Exception as e:
-        print(f"[STATS CACHE] MLB Stats API HR/9 SKIP: {e}")
-
-    # PASS 4b: MLB Stats API season pitching stats for fb%/gb% (different endpoint)
-    try:
-        mlb_url2 = (f'https://statsapi.mlb.com/api/v1/stats'
-                    f'?stats=season&group=pitching&season={CURRENT_YEAR}'
-                    f'&gameType=R&limit=500&fields=stats,splits,stat,homeRunsPer9,'
-                    f'flyBalls,groundBalls,totalBatters,person,fullName')
-        raw2 = savant_get(mlb_url2, accept_json=True, timeout=20)
-        if raw2:
-            data2 = json.loads(raw2)
-            splits = []
-            for s in data2.get('stats', []):
-                splits.extend(s.get('splits', []))
-            merged2 = 0
-            for split in splits:
-                stat = split.get('stat', {})
-                person = split.get('person', {})
-                full_name = person.get('fullName', '')
-                if not full_name:
-                    continue
-                key = normalize_name(full_name).lower()
-                if key not in _stats_cache:
-                    continue
-                hr9 = stat.get('homeRunsPer9')
-                fb  = stat.get('flyBalls', 0) or 0
-                gb  = stat.get('groundBalls', 0) or 0
-                tb  = stat.get('totalBatters', 0) or 0
-                if hr9 is not None and _stats_cache[key].get('hr_per_9') is None:
-                    try: _stats_cache[key]['hr_per_9'] = float(hr9)
-                    except: pass
-                if fb and tb > 0:
-                    _stats_cache[key]['mlb_fb_pct'] = round(100 * fb / tb, 1)
-                if gb and tb > 0:
-                    _stats_cache[key]['mlb_gb_pct'] = round(100 * gb / tb, 1)
-                merged2 += 1
-            print(f"[STATS CACHE] MLB Stats API pitching stats={merged2} merged")
-    except Exception as e:
-        print(f"[STATS CACHE] MLB Stats API pitching SKIP: {e}")
+        print(f"[STATS CACHE] MLB Stats API SKIP: {e}")
 
     print(f"[STATS CACHE] Total players={len(_stats_cache)}")
     with _stats_lock:
