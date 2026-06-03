@@ -193,7 +193,37 @@ SYSTEM_PROMPT = (
     "    Adj HPI>=5.5 = TOP 2 pick. Adj HPI 4.0-5.4 = B-grade/sleeper. Adj HPI<4.0 = fade.\n"
     "  Fail a HARD STOP = drop it. Everything else = list it with honest grade.\n\n"
 
+    "RECENT FORM — last 14 games (shown as FORM14 in context):\n"
+    "  HOT streak (avg>=.310 in last 14 games): upgrade hit prop 1 tier. Market uses season stats, you use form.\n"
+    "  COLD streak (avg<=.185 in last 14): downgrade hit prop even if season xwOBA looks good.\n"
+    "  FORM14 2+ HRs: batter is locked in on power — upgrade HR confidence regardless of HPI tier.\n"
+    "  FORM14 OPS>=.950: elite recent contact — strong hit prop regardless of season numbers.\n"
+    "  Pitcher STRUGGLING (ERA>=6.00 last 14 days): gate opens one step. Market prices season ERA.\n"
+    "  Pitcher HOT-STRETCH (ERA<=2.50 last 14 days): gate closes one step — he's dealing right now.\n"
+    "  ALWAYS check FORM14 before finalizing. HOT batter vs STRUGGLING pitcher = automatic upgrade.\n\n"
+
+    "TIMES-THROUGH-ORDER — mispriced late AB value:\n"
+    "  Pitchers allow 15-20% more damage each time through the lineup (research-confirmed).\n"
+    "  3rd time through (typically 6th-7th inning for spots 1-4): +.040-.060 wOBA vs 1st time through.\n"
+    "  Batters in spots 1-4 face starter 3 times. Spots 5-9 often see bullpen by 3rd PA.\n"
+    "  FOR HITS: Spot 1-4 batter with moderate stats who faces tiring starter in 3rd AB = edge.\n"
+    "  FOR HRs: 3rd time through + OPEN gate + warm park = upgrade even B-grade power profiles.\n"
+    "  This edge is systematic — market prices at-bats equally. You price the 3rd AB higher.\n\n"
+
+    "BULLPEN EXPOSURE FOR HITS:\n"
+    "  WEAK pen (ERA>5.00): batters 5-9 frequently get 2nd PA against inferior relievers.\n"
+    "  Market prices hit props based on starter matchup. You price reliever exposure too.\n"
+    "  Upgrade ANY batter (even low xwOBA .280+) in spots 5-9 facing WEAK pen.\n"
+    "  Bottom-of-lineup hit props at BOOSTER parks vs WEAK pens are chronically underpriced.\n\n"
+
+    "LOWKEY PLAYS — what nobody else bets:\n"
+    "  HOT FORM14 + 3rd-time-through timing + weak pen = hit prop regardless of season stats.\n"
+    "  B-grade HR batter (HPI 4-5) with 2+ recent HRs vs STRUGGLING pitcher = underpriced HR.\n"
+    "  Spot 7-9 hitter with wOBA .300+ and HOT FORM14 vs WEAK pen = sleeper hit no one touches.\n"
+    "  The market prices name recognition. You price situational edges nobody models.\n\n"
+
     "DATA RULES: Every number from pre-computed context only. No substitutions. "
+
     "GAP=xwOBA-wOBA. Positive=COLD. Negative=HOT. [PROXY]=no 2026 data, max B.\n\n"
 
     "OUTPUT: Full sharp analysis — every layer, every edge, specific numbers. "
@@ -458,18 +488,34 @@ def load_stats_cache():
                 f"{row.get('first_name','')} {row.get('last_name','')}".strip()).strip(' ,')
 
     def pull_rows(rows, player_type='batter'):
-        """Store/merge a list of player rows into the stats cache."""
+        """Store/merge a list of player rows into the stats cache.
+        Uses attempts count as tiebreaker — higher attempts = more reliable data.
+        Tracks __batter_attempts__ and __pitcher_attempts__ separately to prevent
+        pitcher stats overwriting batter stats for two-way players."""
         count = 0
         for row in rows:
             name = parse_name(row)
             if name and len(name) > 2:
                 key = normalize_name(name).lower()
+                new_attempts = safe_float(row.get('attempts', 0)) or 0
                 if key in _stats_cache:
-                    for k, v in row.items():
-                        if v not in ('', None, 'null', 'None', 'NaN'):
-                            _stats_cache[key][k] = v
+                    existing = _stats_cache[key]
+                    # Track attempts by player_type separately
+                    type_key = f'__{player_type}_attempts__'
+                    existing_type_attempts = existing.get(type_key, 0) or 0
+                    # Only merge new data if same player_type OR new has more attempts for this type
+                    existing_type = existing.get('__primary_type__', player_type)
+                    if player_type == existing_type or new_attempts >= existing_type_attempts:
+                        for k, v in row.items():
+                            if v not in ('', None, 'null', 'None', 'NaN'):
+                                existing[k] = v
+                        existing[type_key] = max(new_attempts, existing_type_attempts)
+                        if new_attempts >= existing_type_attempts:
+                            existing['__primary_type__'] = player_type
                 else:
                     _stats_cache[key] = dict(row)
+                    _stats_cache[key]['__primary_type__'] = player_type
+                    _stats_cache[key][f'__{player_type}_attempts__'] = new_attempts
                 count += 1
         return count
 
@@ -698,6 +744,23 @@ def fetch_one_player(info, cache=None):
 
     # SOURCE 1: bulk cache — use pre-loaded cache if provided
     row = get_cached_stats(name, cache=cache)
+
+    # Validate: if cache row's primary type doesn't match requested role, check attempts
+    if row is not None:
+        cache_primary = row.get('__primary_type__', 'batter')
+        requested_type = 'pitcher' if info.get('role') == 'PITCHER' else 'batter'
+        if cache_primary != requested_type:
+            # Check if the other-type has many more attempts (bad merge)
+            other_attempts = row.get(f'__{cache_primary}_attempts__', 0) or 0
+            my_attempts = row.get(f'__{requested_type}_attempts__', 0) or 0
+            if other_attempts > my_attempts * 3:
+                # Cache dominated by wrong player type - use cautiously
+                print(f"[CACHE WARN] {name}: primary={cache_primary} requested={requested_type} "
+                      f"({other_attempts} vs {my_attempts} attempts)")
+                # For batters requested but pitcher data dominant: mark as proxy
+                if requested_type == 'batter':
+                    result['fetch_status'] = 'found/no stats'
+                    return result
     if row:
         def g(row, *keys):
             """Returns first positive non-null value. Use for EV, HH% etc where 0 means missing."""
@@ -1118,6 +1181,82 @@ TEAM_IDS = {
     'rockies': 115, 'royals': 118, 'tigers': 116, 'twins': 142,
     'white sox': 145, 'yankees': 147,
 }
+
+
+def fetch_recent_form(player_id, role='batter', days=14):
+    """Fetch last 14 game stats from MLB Stats API. Returns dict or None on failure."""
+    if not player_id:
+        return None
+    try:
+        group = 'pitching' if role == 'pitcher' else 'hitting'
+        url = (f'https://statsapi.mlb.com/api/v1/people/{player_id}/stats'
+               f'?stats=lastXGames&group={group}&gameType=R&lastXGames={days}&season={CURRENT_YEAR}')
+        req = urllib.request.Request(url,
+              headers={'User-Agent': 'SharpOracle/1.0', 'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read())
+        splits = []
+        for sg in data.get('stats', []):
+            splits.extend(sg.get('splits', []))
+        if not splits:
+            return None
+        stat = splits[0].get('stat', {}) if splits else {}
+        if role == 'pitcher':
+            era = stat.get('era')
+            ip  = stat.get('inningsPitched', '0')
+            hr  = stat.get('homeRuns', 0)
+            bb  = stat.get('baseOnBalls', 0)
+            k   = stat.get('strikeOuts', 0)
+            return {
+                'recent_era': safe_float(era),
+                'recent_ip': safe_float(ip),
+                'recent_hr_allowed': hr,
+                'recent_bb': bb,
+                'recent_k': k,
+            }
+        else:
+            avg  = stat.get('avg', '.000')
+            hr   = stat.get('homeRuns', 0)
+            hits = stat.get('hits', 0)
+            ab   = stat.get('atBats', 0)
+            ops  = stat.get('ops', '.000')
+            slg  = stat.get('sluggingPercentage', '.000')
+            bb   = stat.get('baseOnBalls', 0)
+            return {
+                'recent_avg':  safe_float(avg),
+                'recent_hr':   int(hr) if hr else 0,
+                'recent_hits': int(hits) if hits else 0,
+                'recent_ab':   int(ab) if ab else 0,
+                'recent_ops':  safe_float(ops),
+                'recent_slg':  safe_float(slg),
+                'recent_bb':   int(bb) if bb else 0,
+            }
+    except Exception as e:
+        return None
+
+
+def fetch_umpire_tendency(game_date=None):
+    """Fetch today's umpire K/BB tendency from Baseball Reference. Returns label or None."""
+    try:
+        import datetime
+        date_str = game_date or datetime.date.today().strftime('%Y-%m-%d')
+        url = f'https://www.baseball-reference.com/previews/{date_str[:4]}/{date_str}.shtml'
+        req = urllib.request.Request(url, headers=_HEADERS)
+        with urllib.request.urlopen(req, timeout=8) as r:
+            html = r.read().decode('utf-8', errors='replace')
+        # Look for umpire info
+        ump_idx = html.find('Home Plate Umpire')
+        if ump_idx == -1:
+            ump_idx = html.find('umpire')
+        if ump_idx > 0:
+            snippet = html[ump_idx:ump_idx+200]
+            # Extract umpire name
+            m = re.search(r'([A-Z][a-z]+ [A-Z][a-z]+).*?(\d+\.?\d*)%.*?K', snippet)
+            if m:
+                return {'name': m.group(1), 'k_pct': safe_float(m.group(2))}
+        return None
+    except Exception:
+        return None
 
 def fetch_bullpen_era(team_name):
     """Fetch bullpen ERA from MLB Stats API (reliable, free, no scraping)."""
@@ -1605,7 +1744,7 @@ def compute_platoon(bh, ph):
     return 'SAME'
 
 # ─── CONTEXT BUILDER ─────────────────────────────────────────────────────────
-def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
+def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, recent_form=None):
     home = parsed.get('home_team', '?')
     away = parsed.get('away_team', '?')
     wx = weather
@@ -1641,10 +1780,23 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
         g = p.get('gap')
         gs = f"{g:+.3f}" if g is not None else 'N/A'
         proxy = '[PROXY] ' if 'no stat' in str(p.get('fetch_status','')) else ''
+
+        # Recent pitcher form
+        pitcher_form_str = ''
+        if recent_form and p.get('name') in recent_form:
+            pf = recent_form[p['name']]
+            if pf:
+                era14 = pf.get('recent_era')
+                ip14  = pf.get('recent_ip', 0)
+                hr14  = pf.get('recent_hr_allowed', 0)
+                if era14 is not None and ip14 and float(str(ip14).split('.')[0]) >= 5:
+                    ptrend = 'HOT-STRETCH' if era14 <= 2.50 else ('STRUGGLING' if era14 >= 6.00 else 'NEUTRAL')
+                    pitcher_form_str = f' | FORM14=ERA{era14:.2f}({ip14}IP,{hr14}HR){ptrend}'
+
         lines.append(
             f"  {proxy}{p.get('name','?')} ({p.get('hand','?')}HP) "
             f"pitches for {p.get('team','?')}, FACES {faces} batters | "
-            f"GATE={score}/4={gate} | gap={gs} | {breakdown}"
+            f"GATE={score}/4={gate} | gap={gs}{pitcher_form_str} | {breakdown}"
         )
 
     # Bullpen ERA
@@ -1732,11 +1884,29 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era):
                 except:
                     pass
 
+            # Recent form (last 14 days) — if available
+            form_str = ''
+            if recent_form and b.get('name') in recent_form:
+                f = recent_form[b['name']]
+                if f:
+                    avg = f.get('recent_avg')
+                    hr  = f.get('recent_hr', 0)
+                    ab  = f.get('recent_ab', 0)
+                    ops = f.get('recent_ops')
+                    if avg is not None and ab and ab >= 10:
+                        trend = 'HOT' if avg >= 0.310 else ('COLD-STREAK' if avg <= 0.185 else 'NEUTRAL')
+                        hr_str = f' {hr}HR' if hr else ''
+                        form_str = f' | FORM14={avg:.3f}{hr_str}({ab}AB){trend}'
+                        if ops:
+                            form_str += f' OPS={ops:.3f}'
+                    elif ab and ab < 10:
+                        form_str = f' | FORM14=small-sample({ab}AB)'
+
             # Upgrade #14 already in breakdown string if applicable
             lines.append(
                 f"  #{b.get('lineup_pos','?')} {proxy}{b.get('name','?')} ({b.get('hand','?')}HB) | "
-                f"SCORE={score}/4 GRADE={grade} | plat={platoon} | gap={gs}({gap_flag}){hr_cap}{u11}{u12} | "
-                f"wOBA={b.get('woba','N/A')} | {breakdown}"
+                f"SCORE={score}/4 GRADE={grade} | plat={platoon} | gap={gs}({gap_flag}){hr_cap}{u11}{u12}"
+                f"{form_str} | wOBA={b.get('woba','N/A')} | {breakdown}"
             )
 
     lines.append('')
@@ -1930,6 +2100,28 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         batter_stats  = fetch_all_parallel(batter_list, workers=2, cache=cache)
         all_statcast  = pitcher_stats + batter_stats
 
+        # Fetch recent form (last 14 days) for all players in parallel
+        # Completely non-blocking — failures return None silently
+        def _fetch_form(player):
+            pname = normalize_name(player.get('name', '')).lower()
+            crow = cache.get(pname, {})
+            pid = crow.get('player_id')
+            if not pid:
+                return None
+            role = 'pitcher' if player.get('role') == 'PITCHER' else 'batter'
+            form = fetch_recent_form(pid, role=role, days=14)
+            return (player.get('name'), form)
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+                form_results = list(ex.map(_fetch_form, all_statcast))
+            recent_form = {name: form for name, form in form_results
+                          if name and form is not None}
+            print(f"[RECENT FORM] Got {len(recent_form)}/{len(all_statcast)} players")
+        except Exception as e:
+            recent_form = {}
+            print(f"[RECENT FORM] SKIP: {e}")
+
         ok = sum(1 for x in all_statcast if x.get('fetch_status') == 'ok')
         print(f"[STATS] {ok}/{len(all_statcast)} ok")
 
@@ -1962,7 +2154,7 @@ def run_job(jid, sid, raw_lineup, game_date=None):
 
         # STEP 4: Analysis (runs in background, statcast already visible)
         step_set(jid, 3, 'active', 'Running model analysis...')
-        ctx = build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era)
+        ctx = build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, recent_form)
         analysis = call_claude(
             [{'role': 'user', 'content': ctx}],
             system=SYSTEM_PROMPT,
