@@ -561,44 +561,55 @@ def load_stats_cache():
         except Exception as e:
             print(f"[STATS CACHE] custom {player_type} SKIP: {e}")
 
-    # PASS 4: MLB Stats API - pitcher HR/9, fly ball %, ground ball %
+    # PASS 4: Savant pitching leaderboard - HR/9, ERA, K/9 (more reliable than MLB Stats API)
     try:
-        mlb_url = (f'https://statsapi.mlb.com/api/v1/stats'
-                   f'?stats=season&group=pitching&season={CURRENT_YEAR}'
-                   f'&gameType=R&limit=500&sportId=1')
-        raw_json = savant_get(mlb_url, accept_json=True, timeout=25)
-        if raw_json and len(raw_json) > 100:
-            data = json.loads(raw_json)
+        savant_pitch_url = (f'https://baseballsavant.mlb.com/leaderboard/pitching'
+                            f'?min=1&type=season&year={CURRENT_YEAR}&csv=true')
+        raw_pitch = savant_get(savant_pitch_url, accept_json=True, timeout=25)
+        if raw_pitch and len(raw_pitch) > 1000 and not raw_pitch.strip().startswith('<'):
+            import csv as _csv, io as _io
+            rows_p = list(_csv.DictReader(_io.StringIO(raw_pitch)))
             merged = 0
-            for stat_group in data.get('stats', []):
-                for split in stat_group.get('splits', []):
-                    stat   = split.get('stat', {})
-                    player = split.get('player', split.get('person', {}))
-                    full_name = player.get('fullName', '')
-                    if not full_name:
-                        continue
-                    key = normalize_name(full_name).lower()
-                    if key not in _stats_cache:
-                        continue
-                    hr9 = stat.get('homeRunsPer9')
-                    fb  = stat.get('flyBalls')  or 0
-                    gb  = stat.get('groundBalls') or 0
-                    tb  = stat.get('totalBatters') or 0
-                    if hr9 is not None:
-                        try:
-                            _stats_cache[key]['hr_per_9'] = round(float(hr9), 2)
+            for row in rows_p:
+                # Savant pitching leaderboard uses last_name, first_name
+                lf = row.get('last_name, first_name', '') or row.get('player_name', '')
+                if ',' in lf:
+                    parts = lf.split(',', 1)
+                    name = f"{parts[1].strip()} {parts[0].strip()}"
+                else:
+                    name = lf.strip()
+                if not name:
+                    continue
+                key = normalize_name(name).lower()
+                if key not in _stats_cache:
+                    continue
+                # p_era, p_hr, p_ip fields in Savant pitching leaderboard
+                p_hr = row.get('p_home_run') or row.get('home_run') or row.get('hr')
+                p_ip = row.get('p_formatted_ip') or row.get('ip') or row.get('innings_pitched')
+                if p_hr and p_ip:
+                    try:
+                        hr_val = float(str(p_hr).replace(',',''))
+                        # Convert IP to decimal (e.g. "32.1" -> 32.33)
+                        ip_str = str(p_ip)
+                        if '.' in ip_str:
+                            ip_whole, ip_frac = ip_str.split('.',1)
+                            ip_dec = float(ip_whole) + float(ip_frac) / 3.0
+                        else:
+                            ip_dec = float(ip_str)
+                        if ip_dec > 0:
+                            hr9 = round((hr_val / ip_dec) * 9, 2)
+                            _stats_cache[key]['hr_per_9'] = hr9
                             merged += 1
-                        except Exception:
-                            pass
-                    if fb and tb > 0:
-                        _stats_cache[key]['mlb_fb_pct'] = round(100 * fb / tb, 1)
-                    if gb and tb > 0:
-                        _stats_cache[key]['mlb_gb_pct'] = round(100 * gb / tb, 1)
-            print(f"[STATS CACHE] MLB Stats API pitcher={merged} merged")
+                    except Exception:
+                        pass
+            print(f"[STATS CACHE] Savant pitching leaderboard HR/9={merged} merged")
+            # Log first row fields for debugging
+            if rows_p:
+                print(f"[STATS CACHE] Pitching leaderboard fields: {list(rows_p[0].keys())[:15]}")
         else:
-            print(f"[STATS CACHE] MLB Stats API no response or empty")
+            print(f"[STATS CACHE] Savant pitching leaderboard no response")
     except Exception as e:
-        print(f"[STATS CACHE] MLB Stats API SKIP: {e}")
+        print(f"[STATS CACHE] Savant pitching leaderboard SKIP: {e}")
 
     print(f"[STATS CACHE] Total players={len(_stats_cache)}")
     with _stats_lock:
@@ -2306,7 +2317,9 @@ class Handler(BaseHTTPRequestHandler):
                 ('expected_stats_pitcher',
                  f'https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=pitcher&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
                 ('mlb_stats_api_pitching',
-                 f'https://statsapi.mlb.com/api/v1/stats?stats=season&group=pitching&season={CURRENT_YEAR}&gameType=R&limit=10&hydrate=person'),
+                 f'https://statsapi.mlb.com/api/v1/stats?stats=season&group=pitching&season={CURRENT_YEAR}&gameType=R&limit=10&sportId=1'),
+                ('savant_pitching_leaderboard',
+                 f'https://baseballsavant.mlb.com/leaderboard/pitching?min=1&type=season&year={CURRENT_YEAR}&csv=true'),
             ]
             for ep_name, url in endpoints:
                 raw = savant_get(url, accept_json=True, timeout=20)
