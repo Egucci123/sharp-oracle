@@ -333,6 +333,7 @@ def call_claude(messages, system=None, max_tokens=4096):
     payload = {
         'model': MODEL,
         'max_tokens': max_tokens,
+        'stream': True,
         'messages': messages,
     }
     if system:
@@ -348,9 +349,23 @@ def call_claude(messages, system=None, max_tokens=4096):
         method='POST'
     )
     try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            data = json.loads(r.read())
-            return data['content'][0]['text']
+        with urllib.request.urlopen(req, timeout=240) as r:
+            full_text = []
+            for line in r:
+                line = line.decode('utf-8').strip()
+                if line.startswith('data: '):
+                    data_str = line[6:]
+                    if data_str == '[DONE]':
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        if chunk.get('type') == 'content_block_delta':
+                            delta = chunk.get('delta', {})
+                            if delta.get('type') == 'text_delta':
+                                full_text.append(delta.get('text', ''))
+                    except Exception:
+                        pass
+            return ''.join(full_text)
     except Exception as e:
         return f"[Claude error: {e}]"
 
@@ -2213,7 +2228,7 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         analysis = call_claude(
             [{'role': 'user', 'content': ctx}],
             system=SYSTEM_PROMPT,
-            max_tokens=4000
+            max_tokens=6000
         )
         with store_lock:
             jobs[jid]['result'] = analysis
