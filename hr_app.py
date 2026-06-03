@@ -359,6 +359,73 @@ _stats_cache = {}
 _stats_loaded = False
 _stats_loading = False
 _stats_lock = threading.Lock()
+
+# Recent form cache — populated at startup/daily refresh, read-only during requests
+_recent_form_cache = {}
+_recent_form_lock  = threading.Lock()
+
+def _fetch_all_recent_form():
+    """
+    Bulk-fetch last-14-game stats for all players in cache.
+    Runs during startup/daily refresh — no user is waiting.
+    Uses player_id from statcast CSVs to hit MLB Stats API.
+    All failures silently skipped.
+    """
+    global _recent_form_cache
+    if not _stats_cache:
+        return
+
+    # Collect unique player IDs
+    players_to_fetch = []
+    seen_pids = set()
+    for key, row in _stats_cache.items():
+        pid = row.get('player_id')
+        if pid and pid not in seen_pids:
+            seen_pids.add(pid)
+            # Determine role from primary type
+            ptype = row.get('__primary_type__', 'batter')
+            # Get name from cache
+            lf = row.get('last_name, first_name', '')
+            if lf and ',' in lf:
+                parts = lf.split(',', 1)
+                name = f"{parts[1].strip()} {parts[0].strip()}"
+            else:
+                name = key  # fallback
+            players_to_fetch.append((name, pid, ptype))
+
+    print(f"[RECENT FORM] Fetching last-14 stats for {len(players_to_fetch)} players...")
+
+    def _one_player(args):
+        name, pid, ptype = args
+        try:
+            result = fetch_recent_form(pid, role=ptype, days=14)
+            if result:
+                return (name, result)
+        except Exception:
+            pass
+        return None
+
+    new_cache = {}
+    try:
+        # Batch in groups of 50 with small delays to avoid rate limiting
+        import time as _time
+        batch_size = 50
+        for i in range(0, len(players_to_fetch), batch_size):
+            batch = players_to_fetch[i:i+batch_size]
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+                futures = list(ex.map(_one_player, batch, timeout=30))
+            for r in futures:
+                if r:
+                    name, form = r
+                    new_cache[name] = form
+            if i + batch_size < len(players_to_fetch):
+                _time.sleep(2)  # be gentle on the API
+
+        with _recent_form_lock:
+            _recent_form_cache = new_cache
+        print(f"[RECENT FORM] Cached {len(new_cache)}/{len(players_to_fetch)} players")
+    except Exception as e:
+        print(f"[RECENT FORM] Bulk fetch error: {e}")
 _csv_dir = os.path.dirname(os.path.abspath(__file__))
 
 def _download_csvs():
@@ -416,6 +483,9 @@ def _daily_refresh_loop():
     load_stats_cache()
     print(f"[CSV REFRESH] Cache ready: {len(_stats_cache)} players")
 
+    # Fetch recent form in background after cache is ready
+    threading.Thread(target=_fetch_all_recent_form, daemon=True, name="recent-form-init").start()
+
     while True:
         now = datetime.datetime.utcnow()
         tomorrow = (now + datetime.timedelta(days=1)).replace(
@@ -431,6 +501,8 @@ def _daily_refresh_loop():
             _stats_loading = False
         load_stats_cache()
         print(f"[CSV REFRESH] Cache refreshed: {len(_stats_cache)} players")
+        # Refresh recent form too
+        threading.Thread(target=_fetch_all_recent_form, daemon=True, name="recent-form-daily").start()
 
 def load_stats_cache():
     """
@@ -2100,43 +2172,10 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         batter_stats  = fetch_all_parallel(batter_list, workers=2, cache=cache)
         all_statcast  = pitcher_stats + batter_stats
 
-        # Fetch recent form (last 14 days) — only for batters 1-6 and pitchers
-        # Limit scope to avoid timeout on full roster
-        def _fetch_form(player):
-            try:
-                pname = normalize_name(player.get('name', '')).lower()
-                crow = cache.get(pname, {})
-                pid = crow.get('player_id')
-                if not pid:
-                    return None
-                pos = player.get('lineup_pos', 99)
-                role = player.get('role', 'BATTER')
-                # Only fetch for pitchers and top 6 batters to keep it fast
-                if role == 'BATTER' and pos > 6:
-                    return None
-                form = fetch_recent_form(pid, role='pitcher' if role == 'PITCHER' else 'batter', days=14)
-                return (player.get('name'), form)
-            except Exception:
-                return None
-
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-                form_futures = {ex.submit(_fetch_form, p): p for p in all_statcast}
-                form_results = []
-                import concurrent.futures as _cf
-                for future in _cf.as_completed(form_futures, timeout=12):
-                    try:
-                        result = future.result(timeout=2)
-                        if result:
-                            form_results.append(result)
-                    except Exception:
-                        pass
-            recent_form = {name: form for name, form in form_results
-                          if name and form is not None}
-            print(f"[RECENT FORM] Got {len(recent_form)}/{len(all_statcast)} players")
-        except Exception as e:
-            recent_form = {}
-            print(f"[RECENT FORM] SKIP: {e}")
+        # Use pre-cached recent form (populated at startup by _fetch_all_recent_form)
+        with _recent_form_lock:
+            recent_form = dict(_recent_form_cache)
+        print(f"[RECENT FORM] Using cached form for {len(recent_form)} players")
 
         ok = sum(1 for x in all_statcast if x.get('fetch_status') == 'ok')
         print(f"[STATS] {ok}/{len(all_statcast)} ok")
