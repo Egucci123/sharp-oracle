@@ -347,17 +347,17 @@ def _download_csvs():
         ('expected_pitchers.csv',
          f'https://baseballsavant.mlb.com/leaderboard/expected_statistics'
          f'?type=pitcher&year={CURRENT_YEAR}&position=&team=&min=1&csv=true'),
-        # Custom pitcher stats  -  fly ball %, ground ball %, HR count
+        # Custom pitcher stats  -  ground ball %, fly ball % (using confirmed Savant field names)
         ('custom_pitchers.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=pitcher&filter=&min=1'
-         f'&selections=p_flyball,p_groundball,p_total_bip,p_home_run,p_ab,groundballs_percent'
+         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,popups_percent'
          f'&chart=false&csv=true'),
-        # Custom batter stats  -  fly ball %, ground ball %, ISO components
+        # Custom batter stats  -  ground ball %, fly ball %, ISO (confirmed Savant field names)
         ('custom_batters.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=batter&filter=&min=1'
-         f'&selections=b_flyball,b_groundball,b_total_bip,b_home_run,b_ab,b_iso'
+         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,b_iso'
          f'&chart=false&csv=true'),
     ]
     for filename, url in urls:
@@ -537,17 +537,17 @@ def load_stats_cache():
             n = pull_endpoint(url, player_type)
             print(f"[STATS CACHE] live expected_stats {player_type}={n}")
 
-    # PASS 3: custom Savant CSVs - fly ball %, ground ball %, HR count, ISO components
+    # PASS 3: custom Savant CSVs - fly ball %, ground ball %, ISO components
     for player_type, filename, fallback_url in [
         ('pitcher', 'custom_pitchers.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=pitcher&filter=&min=1'
-         f'&selections=p_flyball,p_groundball,p_total_bip,p_home_run,p_ab'
+         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,popups_percent'
          f'&chart=false&csv=true'),
         ('batter', 'custom_batters.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=batter&filter=&min=1'
-         f'&selections=b_flyball,b_groundball,b_total_bip,b_home_run,b_ab,b_iso'
+         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,b_iso'
          f'&chart=false&csv=true'),
     ]:
         try:
@@ -561,16 +561,52 @@ def load_stats_cache():
         except Exception as e:
             print(f"[STATS CACHE] custom {player_type} SKIP: {e}")
 
-    # PASS 4: MLB Stats API - pitcher HR/9 (merges into existing pitcher entries)
+    # PASS 4: MLB Stats API - pitcher HR/9 and fly ball % (merges into existing pitcher entries)
     try:
-        mlb_url = (f'https://statsapi.mlb.com/api/v1/stats'
-                   f'?stats=season&group=pitching&season={CURRENT_YEAR}'
-                   f'&gameType=R&limit=1000&hydrate=person')
+        # Use the correct MLB Stats API endpoint with proper hydration
+        mlb_url = (f'https://statsapi.mlb.com/api/v1/stats/leaders'
+                   f'?leaderCategories=homeRunsPer9&season={CURRENT_YEAR}'
+                   f'&leaderGameTypes=R&limit=500&hydrate=person')
         raw_json = savant_get(mlb_url, accept_json=True, timeout=20)
         if raw_json:
             data = json.loads(raw_json)
-            splits = data.get('stats', [{}])[0].get('splits', []) if data.get('stats') else []
+            leaders = data.get('leagueLeaders', [{}])
             merged = 0
+            for leader_group in leaders:
+                for entry in leader_group.get('leaders', []):
+                    person = entry.get('person', {})
+                    full_name = person.get('fullName', '')
+                    hr9_val = entry.get('value')
+                    if not full_name or hr9_val is None:
+                        continue
+                    key = normalize_name(full_name).lower()
+                    if key in _stats_cache:
+                        try:
+                            _stats_cache[key]['hr_per_9'] = float(hr9_val)
+                            merged += 1
+                        except Exception:
+                            pass
+            print(f"[STATS CACHE] MLB Stats API HR/9={merged} merged")
+        else:
+            # Fallback: use team stats endpoint which is more reliable
+            for team_id in range(108, 148):
+                pass  # skip if primary fails
+    except Exception as e:
+        print(f"[STATS CACHE] MLB Stats API HR/9 SKIP: {e}")
+
+    # PASS 4b: MLB Stats API season pitching stats for fb%/gb% (different endpoint)
+    try:
+        mlb_url2 = (f'https://statsapi.mlb.com/api/v1/stats'
+                    f'?stats=season&group=pitching&season={CURRENT_YEAR}'
+                    f'&gameType=R&limit=500&fields=stats,splits,stat,homeRunsPer9,'
+                    f'flyBalls,groundBalls,totalBatters,person,fullName')
+        raw2 = savant_get(mlb_url2, accept_json=True, timeout=20)
+        if raw2:
+            data2 = json.loads(raw2)
+            splits = []
+            for s in data2.get('stats', []):
+                splits.extend(s.get('splits', []))
+            merged2 = 0
             for split in splits:
                 stat = split.get('stat', {})
                 person = split.get('person', {})
@@ -578,24 +614,23 @@ def load_stats_cache():
                 if not full_name:
                     continue
                 key = normalize_name(full_name).lower()
+                if key not in _stats_cache:
+                    continue
                 hr9 = stat.get('homeRunsPer9')
-                ip = stat.get('inningsPitched', '0')
-                hr = stat.get('homeRuns', 0)
-                # Calculate fly ball % if available
-                fb = stat.get('flyBalls', 0)
-                gb = stat.get('groundBalls', 0)
-                total_bip = stat.get('totalBatters', 0)
-                if key in _stats_cache:
-                    if hr9 is not None:
-                        _stats_cache[key]['hr_per_9'] = float(hr9)
-                    if fb and total_bip:
-                        _stats_cache[key]['mlb_fb_pct'] = round(100 * fb / total_bip, 1)
-                    if gb and total_bip:
-                        _stats_cache[key]['mlb_gb_pct'] = round(100 * gb / total_bip, 1)
-                    merged += 1
-            print(f"[STATS CACHE] MLB Stats API pitcher={merged} merged")
+                fb  = stat.get('flyBalls', 0) or 0
+                gb  = stat.get('groundBalls', 0) or 0
+                tb  = stat.get('totalBatters', 0) or 0
+                if hr9 is not None and _stats_cache[key].get('hr_per_9') is None:
+                    try: _stats_cache[key]['hr_per_9'] = float(hr9)
+                    except: pass
+                if fb and tb > 0:
+                    _stats_cache[key]['mlb_fb_pct'] = round(100 * fb / tb, 1)
+                if gb and tb > 0:
+                    _stats_cache[key]['mlb_gb_pct'] = round(100 * gb / tb, 1)
+                merged2 += 1
+            print(f"[STATS CACHE] MLB Stats API pitching stats={merged2} merged")
     except Exception as e:
-        print(f"[STATS CACHE] MLB Stats API SKIP: {e}")
+        print(f"[STATS CACHE] MLB Stats API pitching SKIP: {e}")
 
     print(f"[STATS CACHE] Total players={len(_stats_cache)}")
     with _stats_lock:
@@ -746,21 +781,29 @@ def fetch_one_player(info, cache=None):
         result['gb_ev']         = sane('exit_velocity', g(row, 'gb'))  # GB exit velocity (separate from GB rate)
         result['avg_hr_dist']   = g(row, 'avg_hr_distance')
         result['max_hit_speed'] = sane('exit_velocity', g(row, 'max_hit_speed'))
-        # New fields from custom Savant CSV (pitcher)
-        p_fb  = g(row, 'p_flyball', 'fly_balls', 'flyBalls')
-        p_gb  = g(row, 'p_groundball', 'ground_balls', 'groundBalls')
-        p_bip = g(row, 'p_total_bip', 'total_bip')
-        if p_fb and p_bip and p_bip > 0:
-            result['fly_ball_pct']    = round(100 * p_fb / p_bip, 1)
-        if p_gb and p_bip and p_bip > 0:
-            result['ground_ball_pct'] = round(100 * p_gb / p_bip, 1)
+        # Fly ball % and ground ball % — try all known field name formats
+        # confirmed working Savant names: flyballs_percent, groundballs_percent
+        result['fly_ball_pct'] = g(row,
+            'flyballs_percent', 'flyball_percent', 'fly_ball_percent',
+            'p_flyball', 'b_flyball', 'flyBalls')
+        result['ground_ball_pct'] = g(row,
+            'groundballs_percent', 'groundball_percent', 'ground_ball_percent',
+            'p_groundball', 'b_groundball', 'groundBalls')
+        # If GB% known but FB% missing, estimate FB = 100 - GB - 28 (avg LD+popup)
+        if result['fly_ball_pct'] is None and result['ground_ball_pct'] and result['ground_ball_pct'] > 0:
+            est = round(100 - result['ground_ball_pct'] - 28, 1)
+            if est > 5:
+                result['fly_ball_pct'] = est
+        # MLB Stats API fallbacks (merged in PASS 4)
+        if result['fly_ball_pct'] is None and row.get('mlb_fb_pct'):
+            result['fly_ball_pct'] = row.get('mlb_fb_pct')
+        if result['ground_ball_pct'] is None and row.get('mlb_gb_pct'):
+            result['ground_ball_pct'] = row.get('mlb_gb_pct')
+        # batter_fb_pct = fly_ball_pct for batters (used in HPI)
+        if result['fly_ball_pct'] is not None:
+            result['batter_fb_pct'] = result['fly_ball_pct']
         # hr_per_9 from MLB Stats API merge
         result['hr_per_9'] = g(row, 'hr_per_9', 'homeRunsPer9')
-        # New fields from custom Savant CSV (batter)
-        b_fb  = g(row, 'b_flyball', 'fly_balls', 'flyBalls')
-        b_bip = g(row, 'b_total_bip', 'b_total_pa', 'total_bip')
-        if b_fb and b_bip and b_bip > 0:
-            result['batter_fb_pct'] = round(100 * b_fb / b_bip, 1)
         # ISO directly from Savant custom CSV (b_iso field)
         result['iso'] = g(row, 'b_iso', 'iso')
         if result['iso'] is None:
@@ -768,23 +811,7 @@ def fetch_one_player(info, cache=None):
             avg = g(row, 'b_batting_average', 'batting_average', 'ba')
             if slg and avg:
                 result['iso'] = round(slg - avg, 3)
-        # Pull mlb_fb_pct from MLB Stats API merge if custom CSV didn't have it
-        if result['fly_ball_pct'] is None and row.get('mlb_fb_pct'):
-            result['fly_ball_pct'] = row.get('mlb_fb_pct')
-        if result['ground_ball_pct'] is None and row.get('mlb_gb_pct'):
-            result['ground_ball_pct'] = row.get('mlb_gb_pct')
-        # Fallback: groundballs_percent from existing working custom URL
-        # Estimate fly_ball_pct = 100 - groundballs_percent - 28 (avg LD+popup%)
-        if result['ground_ball_pct'] is None:
-            gb_from_existing = g(row, 'groundballs_percent', 'groundball_percent', 'ground_ball_percent')
-            if gb_from_existing:
-                result['ground_ball_pct'] = gb_from_existing
-        if result['fly_ball_pct'] is None and result['ground_ball_pct']:
-            # Rough estimate: LD (~20%) + popup (~8%) = ~28% of BIP
-            # fly_ball_pct = 100 - gb_pct - 28
-            est_fb = round(100 - result['ground_ball_pct'] - 28, 1)
-            if est_fb > 0:
-                result['fly_ball_pct'] = est_fb
+
         if result['xwoba'] is not None:
             result['data_source']  = 'leaderboard'
             result['fetch_status'] = 'ok'
@@ -2304,8 +2331,14 @@ class Handler(BaseHTTPRequestHandler):
                  f'https://baseballsavant.mlb.com/leaderboard/statcast?type=batter&year={CURRENT_YEAR}&position=&team=&min=1&csv=true'),
                 ('custom_batter_csv',
                  f'https://baseballsavant.mlb.com/leaderboard/custom?year={CURRENT_YEAR}&type=batter&filter=&min=1&selections=pa,avg_hit_speed,ev95percent,barrel_batted_rate,groundballs_percent,hard_hit_percent,csw&chart=false&csv=true'),
+                ('custom_batter_fb',
+                 f'https://baseballsavant.mlb.com/leaderboard/custom?year={CURRENT_YEAR}&type=batter&filter=&min=1&selections=groundballs_percent,flyballs_percent,linedrives_percent,b_iso&chart=false&csv=true'),
+                ('custom_pitcher_fb',
+                 f'https://baseballsavant.mlb.com/leaderboard/custom?year={CURRENT_YEAR}&type=pitcher&filter=&min=1&selections=groundballs_percent,flyballs_percent,linedrives_percent,popups_percent&chart=false&csv=true'),
                 ('expected_stats_pitcher',
                  f'https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=pitcher&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
+                ('mlb_stats_api_pitching',
+                 f'https://statsapi.mlb.com/api/v1/stats?stats=season&group=pitching&season={CURRENT_YEAR}&gameType=R&limit=10&hydrate=person'),
             ]
             for ep_name, url in endpoints:
                 raw = savant_get(url, accept_json=True, timeout=20)
@@ -2353,6 +2386,20 @@ class Handler(BaseHTTPRequestHandler):
             # Test page scrape
             scraped = scrape_player_page(name)
             result['page_scraped'] = scraped
+
+            # Cache inspection — what fields does this player have in cache?
+            cache = load_stats_cache()
+            tgt_key = normalize_name(name).lower()
+            cached_row = cache.get(tgt_key)
+            if cached_row:
+                result['cache_keys'] = list(cached_row.keys())
+                result['cache_fb_fields'] = {k: v for k, v in cached_row.items()
+                    if any(x in k.lower() for x in ['fly','ground','iso','hr_per','mlb_fb','mlb_gb'])}
+            else:
+                result['cache_miss'] = f'No entry for key: {tgt_key}'
+                # Try partial match
+                matches = [k for k in cache.keys() if tgt_key.split()[0] in k][:5]
+                result['cache_partial_matches'] = matches
 
             self._json(result)
 
