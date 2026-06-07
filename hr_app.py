@@ -243,8 +243,9 @@ SYSTEM_PROMPT = (
     "Write in this exact order. Do not deviate. Picks come FIRST so they are never cut off.\n\n"
 
     "## PICKS\n\n"
-    "**HR #1:** [Name] ([Team]) | Grade: [A/B/C] | Adj-HPI: [X] | [odds]\n"
-    "[3 sentences: key metrics + pitcher vulnerability + specific edge. Include wind-adjusted carry if relevant.]\n\n"
+    "**HR #1:** [Name] ([Team]) | Grade: [A/A-/B+/B] | Adj-HPI: [X] (base=[X] SAME=[0/-0.3/-0.5] gate=[0/-0.5/-1.0] hr9=[0/+0.25/+0.5/+0.75]) | [odds]\n"
+    "[FAV platoon = 0 adjustment. Show math inline so it's auditable.]\n"
+    "[3 sentences: key metrics + pitcher vulnerability + specific edge.]\n\n"
     "**HR #2:** [Name] ([Team]) | Grade: [X] | Adj-HPI: [X] | [odds]\n"
     "[3 sentences]\n"
     "OR: **NO HR #2** — [one-line reason]\n\n"
@@ -276,7 +277,7 @@ SYSTEM_PROMPT = (
     "wOBA>=.370 with HOT gap = real hitter, hits remain live, HR faded.\n\n"
 
     "ML/TOTALS RULES:\n"
-    "ML: need 3+ — xwOBA gap>0.050 | bullpen tier edge | run diff>20 | W4+ streak | home field.\n"
+    "ML: need 3+ — xwOBA gap>0.050 | bullpen tier edge | run diff>20 | W4+ streak (W2/W3 = NOT meaningful) | home field.\n"
     "OVER: both gates 0-1 + wind OUT 8mph+ + temp>80F + weak pen >5.00 ERA.\n"
     "UNDER: both gates 2+ + wind IN 8mph+ + cold <55F + strong pens <3.50 ERA.\n\n"
     + LOCKED_RULES
