@@ -226,41 +226,46 @@ SYSTEM_PROMPT = (
 
     "GAP=xwOBA-wOBA. Positive=COLD. Negative=HOT. [PROXY]=no 2026 data, max B.\n\n"
 
-    "OUTPUT: Full sharp analysis — every layer, every edge, specific numbers. "
-    "Then four sections:\n\n"
-    "CRITICAL OUTPUT RULE: The TOP 2 HR and TOP 2 HIT sections must contain actual picks OR "
-    "explicitly say 'NO SECOND [HR/HIT] PICK' with brief reason. "
-    "NEVER fill a slot with a player you are fading — that wastes the slot and confuses the bet. "
-    "If only 1 HR candidate clears scrutiny, list 1 HR pick and write "
-    "'NO SECOND HR PICK — [reason]' for slot 2.\n"
-    "ORDERING: If a sleeper has higher adjusted HPI than a core pick candidate, "
-    "PROMOTE the sleeper to the core section. Core picks = adjusted HPI>=5.5. Sleepers = 4.0-5.4.\n\n"
-    "TOP 2 HR BETS:\n"
-    "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sentences — exact metrics, temp-adjusted carry, the specific edge]\n"
-    "2. [Name] ([Team]) | Grade: [X] | [odds] | [2 sentences]\n\n"
-    "TOP 2 HIT BETS:\n"
-    "1. [Name] ([Team]) | Grade: [X] | [odds] | [2 sentences]\n"
-    "2. [Name] ([Team]) | Grade: [X] | [odds] | [2 sentences]\n\n"
-    "SLEEPER HR PICKS:\n"
-    "1. [Name] ([Team]) | [odds] | SIGNALS: [every signal] | [2 sentences — what market misses]\n"
-    "2. [Name] ([Team]) | [odds] | SIGNALS: [every signal] | [2 sentences]\n\n"
-    "SLEEPER HIT PICKS:\n"
-    "1. [Name] ([Team]) | [odds] | SIGNALS: [every signal] | [2 sentences]\n"
-    "2. [Name] ([Team]) | [odds] | SIGNALS: [every signal] | [2 sentences]\n\n"
-    "NO SLEEPER rule: if no real edge exists write: NO SLEEPER - no mispriced edge here.\n\n"
-    "MONEYLINE PICK:\n"
-    "[Team] ML | [odds] | [2 sentences — pitching mismatch, platoon advantage, bullpen, wind]\n"
-    "OR: NO ML EDGE — factors split, no confident side.\n\n"
-    "TOTALS PICK:\n"
-    "OVER/UNDER [line] | [odds] | [2 sentences — pitcher gates, lineup xwOBA, wind impact, temp]\n"
-    "OR: NO TOTALS EDGE — factors split, no confident side.\n\n"
-    "ML/TOTALS RULES: Only pick when 3+ factors clearly align. Never force. "
-    "MONEYLINE factors: starter xwOBA gap >0.050 | bullpen tier edge | team run differential gap >20 | "
-    "active win streak 4+ | home field. "
-    "Wind blowing OUT 8mph+ at outdoor park = meaningful OVER lean. "
-    "Wind blowing IN 8mph+ = meaningful UNDER lean. "
-    "Bullpen ERA UNKNOWN = skip ML, only pick Totals if 2+ other factors align. "
-    "Team on W4+ streak with positive run differential = lean toward them on ML.\n\n"
+    "OUTPUT FORMAT — PICKS FIRST, ANALYSIS AFTER:\n"
+    "Write in this exact order. Do not deviate. Picks come FIRST so they are never cut off.\n\n"
+
+    "## PICKS\n\n"
+    "**HR #1:** [Name] ([Team]) | Grade: [A/B/C] | Adj-HPI: [X] | [odds]\n"
+    "[3 sentences: key metrics + pitcher vulnerability + specific edge. Include wind-adjusted carry if relevant.]\n\n"
+    "**HR #2:** [Name] ([Team]) | Grade: [X] | Adj-HPI: [X] | [odds]\n"
+    "[3 sentences]\n"
+    "OR: **NO HR #2** — [one-line reason]\n\n"
+    "**HIT #1:** [Name] ([Team]) | Grade: [X] | [odds]\n"
+    "[2 sentences: wOBA/xwOBA + pitcher gate + edge]\n\n"
+    "**HIT #2:** [Name] ([Team]) | Grade: [X] | [odds]\n"
+    "[2 sentences]\n"
+    "OR: **NO HIT #2** — [one-line reason]\n\n"
+    "**SLEEPER HR #1:** [Name] ([Team]) | [odds] | SIGNALS: [list] | [2 sentences]\n"
+    "**SLEEPER HR #2:** [Name] ([Team]) | [odds] | SIGNALS: [list] | [2 sentences]\n"
+    "OR: **NO SLEEPER HR** — no mispriced edge.\n\n"
+    "**SLEEPER HIT #1:** [Name] ([Team]) | [odds] | [2 sentences]\n"
+    "**SLEEPER HIT #2:** [Name] ([Team]) | [odds] | [2 sentences]\n"
+    "OR: **NO SLEEPER HIT** — no mispriced edge.\n\n"
+    "**ML:** [Team] | [odds] | [2 sentences] OR: **NO ML EDGE**\n\n"
+    "**TOTALS:** OVER/UNDER [line] | [odds] | [2 sentences] OR: **NO TOTALS EDGE**\n\n"
+    "---\n\n"
+    "## GAME READS\n"
+    "[Pitching gates, environment math, key batter analysis — concise bullets, no more than 400 words total]\n\n"
+
+    "PICK RULES:\n"
+    "Core HR = adjusted HPI>=4.5 after gate/platoon/gap adjustments.\n"
+    "Sleeper HR = 3+ independent signals + HR dist>=380 + HPI>=3.0.\n"
+    "Pitcher HR/9>=1.5 = +0.5 to every qualified batter's adjusted HPI vs that pitcher.\n"
+    "Wind OUT 8mph+: add carry boost to HR dist before checking thresholds.\n"
+    "SAME platoon = -0.3 HPI for power bats (Barrel%>=15), -0.5 for others.\n"
+    "FORM14 2+ HRs in 14 games = +0.5 HPI boost (locked-in power stretch).\n"
+    "HOT gap fades HR only. HOT-EXTREME (>=.120) fades HR AND hits.\n"
+    "wOBA>=.370 with HOT gap = real hitter, hits remain live, HR faded.\n\n"
+
+    "ML/TOTALS RULES:\n"
+    "ML: need 3+ — xwOBA gap>0.050 | bullpen tier edge | run diff>20 | W4+ streak | home field.\n"
+    "OVER: both gates 0-1 + wind OUT 8mph+ + temp>80F + weak pen >5.00 ERA.\n"
+    "UNDER: both gates 2+ + wind IN 8mph+ + cold <55F + strong pens <3.50 ERA.\n\n"
     + LOCKED_RULES
 )
 
@@ -1854,8 +1859,17 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
         f"  AWAY team: {away}",
     ]
 
+    # Pre-compute wind carry boost for HR distance adjustments
+    wind_carry = 0
+    wi = weather.get('wind_impact', {}) if weather else {}
+    if wi:
+        boost = wi.get('carry_boost', 0) or 0
+        if wi.get('impact') in ('OUT', 'IN'):
+            wind_carry = boost  # positive=OUT, negative=IN
+
     # Pitcher gates
     pitcher_gates = {}
+    pitcher_hr9_bonus = {}  # team -> HPI bonus for batters vs that pitcher's HR/9
     lines.append('')
     lines.append('=== PITCHERS (gate pre-computed) ===')
     for p in all_statcast:
@@ -1864,6 +1878,13 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
         score, gate, breakdown = compute_pitcher_gate(p)
         faces = p.get('faces_team', '?')
         pitcher_gates[faces] = {'gate': gate, 'score': score, 'hand': p.get('hand','?'), 'name': p.get('name','?')}
+
+        # HR/9 bonus for batters facing this pitcher
+        hr9 = p.get('hr_per_9')
+        if hr9:
+            if hr9 >= 1.8:   pitcher_hr9_bonus[faces] = 0.75
+            elif hr9 >= 1.5: pitcher_hr9_bonus[faces] = 0.5
+            elif hr9 >= 1.2: pitcher_hr9_bonus[faces] = 0.25
         g = p.get('gap')
         gs = f"{g:+.3f}" if g is not None else 'N/A'
         proxy = '[PROXY] ' if 'no stat' in str(p.get('fetch_status','')) else ''
@@ -1971,7 +1992,18 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
                 except:
                     pass
 
-            # Recent form (last 14 days) — if available
+            # Wind-adjusted HR distance
+            hr_dist = b.get('avg_hr_dist') or 0
+            wind_adj_str = ''
+            if hr_dist and hr_dist > 0 and wind_carry != 0:
+                adj_dist = round(hr_dist + wind_carry, 1)
+                wind_adj_str = f' WIND-ADJ-DIST={adj_dist}ft({hr_dist}+{wind_carry:+.0f})'
+
+            # Pitcher HR/9 bonus for this batter's team
+            hr9_bonus = pitcher_hr9_bonus.get(b.get('team', ''), 0)
+            hr9_bonus_str = f' PITCHER-HR9-BONUS=+{hr9_bonus}HPI' if hr9_bonus else ''
+
+            # Recent form
             form_str = ''
             if recent_form and b.get('name') in recent_form:
                 f = recent_form[b['name']]
@@ -1986,14 +2018,11 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
                         form_str = f' | FORM14={avg:.3f}{hr_str}({ab}AB){trend}'
                         if ops:
                             form_str += f' OPS={ops:.3f}'
-                    elif ab and ab < 10:
-                        form_str = f' | FORM14=small-sample({ab}AB)'
 
-            # Upgrade #14 already in breakdown string if applicable
             lines.append(
                 f"  #{b.get('lineup_pos','?')} {proxy}{b.get('name','?')} ({b.get('hand','?')}HB) | "
                 f"SCORE={score}/4 GRADE={grade} | plat={platoon} | gap={gs}({gap_flag}){hr_cap}{u11}{u12}"
-                f"{form_str} | wOBA={b.get('woba','N/A')} | {breakdown}"
+                f"{wind_adj_str}{hr9_bonus_str}{form_str} | wOBA={b.get('woba','N/A')} | {breakdown}"
             )
 
     lines.append('')
