@@ -52,7 +52,14 @@ PITCHER GATE (suppression score, 0-4 pts):
 
 BATTER GRADE (0-4 pts):
   Barrel%>=15 | xwOBA>=.350 | EV>=91 | HH%>=50 = 1pt each
-  A=4/4+fav | A-=4/4+same OR 3/4+fav | B+=2/4+fav | B=dart | C=override only
+  4/4=elite | 3/4=strong | 2/4=moderate | 1/4=weak | 0/4=fade
+
+HPI THRESHOLDS (use Adj-HPI for final grade label):
+  Adj-HPI>=6.5=A | 5.0-6.4=A- | 4.0-4.9=B+ | 3.0-3.9=B | <3.0=fade
+  Adj-HPI = base HPI - platoon penalty - gate penalty +/- gap/park/pitcher bonuses
+  HALF gate (2/4) = -0.5 HPI | CLOSED gate (3/4) = -1.0 HPI
+  SAME platoon = -0.5 HPI (-0.3 if Barrel%>=15)
+  Pitcher HR/9>=1.8 = +0.75 HPI to batters | HR/9>=1.5 = +0.5 | HR/9>=1.2 = +0.25
 
 CONTACT METRICS (all from statcast CSV, calibrated to real 2026 distributions):
   EV50>=103=ELITE(top-10%) | EV50>=100=PLUS(top-50%) | EV50<97=WEAK(bot-25%)
@@ -105,16 +112,11 @@ SYSTEM_PROMPT = (
 
     "POWER PROFILE:\n"
     "  Every batter has a pre-computed HR POWER INDEX (HPI, 0-10) cross-referencing ALL power signals.\n"
-    "  HPI>=7.0 = elite HR candidate. HPI 5.0-6.9 = B+ candidate. HPI 3.5-4.9 = B grade pick.\n"
-    "  HPI is your PRIMARY HR ranking tool. Sort all candidates by HPI first, then adjust:\n"
-    "    -0.5 for SAME platoon (disadvantage, NOT a dealbreaker — elite power overcomes it)\n"
-    "    -1.0 for CLOSED gate | -2.0 for HOT-EXTREME gap\n"
-    "    +0.5 for BOOSTER park | -1.0 for SUPPRESSOR park | -3.0 for HR dist<370 (hard stop)\n"
-    "  Adjusted HPI>=4.5 = pick it. Adjusted HPI 3.5-4.4 = B grade, list with caveat. <3.0 = fade.\n"
-    "  SAME platoon is -0.5 penalty ONLY. Caminero EV50 104.8 + FB/LD 96.7 + HR dist 407 = HPI 5.5,\n"
-    "    adjusted to 5.0 after SAME penalty = STILL A PICK. Do not veto elite power on platoon alone.\n"
-    "  wOBA is IRRELEVANT for HR picks. Use xwOBA. Mayo wOBA .267 but xwOBA .340 + EV50 104 = HR threat.\n"
-    "  Market prices wOBA. You price xwOBA + EV50 + carry distance. That gap IS the edge.\n\n"
+    "  HPI>=7.0 = A-grade HR candidate. HPI 5.0-6.9 = A- candidate. HPI 4.0-4.9 = B+ pick.\n"
+    "  Adj-HPI>=6.5=A | 5.0-6.4=A- | 4.0-4.9=B+ | 3.0-3.9=B | <3.0=fade.\n"
+    "  Adjusted HPI>=4.0 = list it. Adjusted HPI 3.0-3.9 = sleeper only. <3.0 = fade.\n"
+    "  GRADE LABEL must match Adj-HPI: don't call a 4.0 HPI batter 'B+' — that's B+.\n"
+    "    4.0 = B+, 3.5 = B, 6.5 = A. Be precise. Grade determines bet sizing.\n\n"
     "  EV50 is the single best HR predictor in Statcast. It removes grounders/weak contact.\n"
     "  FB/LD EV is the EV that matters for HRs — only elevated contact becomes home runs.\n"
     "  FB/LD MISMATCH vs pitcher: Batter FB/LD 97 vs pitcher FB/LD allowed 90 = direct carry edge.\n"
@@ -181,7 +183,7 @@ SYSTEM_PROMPT = (
     "    HR dist<380 = DISQUALIFIED for SLEEPER HR only. Core picks live above 370.\n"
     "    HOT-EXTREME gap (magnitude>=.120) = FADE BOTH HR AND HITS always.\n"
     "    HOT-EXTREME gap (magnitude .080-.119) + HR dist<park_threshold = disqualify HR.\n"
-    "    CLOSED gate (3/4) = downgrade one letter on HR. NOT auto-disqualify.\n"
+    "    CLOSED gate (3/4) = -1.0 HPI on HR. HALF gate (2/4) = -0.5 HPI on HR. NOT grade letter drop.\n"
     "  Park-specific HOT-EXTREME disqualification thresholds:\n"
     "    BOOSTER park: HOT-EXTREME + HR dist<375 = disqualify.\n"
     "    NEUTRAL/DOME: HOT-EXTREME + HR dist<385 = disqualify.\n"
@@ -216,11 +218,22 @@ SYSTEM_PROMPT = (
     "  Upgrade ANY batter (even low xwOBA .280+) in spots 5-9 facing WEAK pen.\n"
     "  Bottom-of-lineup hit props at BOOSTER parks vs WEAK pens are chronically underpriced.\n\n"
 
-    "LOWKEY PLAYS — what nobody else bets:\n"
-    "  HOT FORM14 + 3rd-time-through timing + weak pen = hit prop regardless of season stats.\n"
-    "  B-grade HR batter (HPI 4-5) with 2+ recent HRs vs STRUGGLING pitcher = underpriced HR.\n"
-    "  Spot 7-9 hitter with wOBA .300+ and HOT FORM14 vs WEAK pen = sleeper hit no one touches.\n"
-    "  The market prices name recognition. You price situational edges nobody models.\n\n"
+    "LINEUP POSITION = PA VOLUME:\n"
+    "  Spot 1-2: ~4.5 PA (most starter exposure, most total plate appearances)\n"
+    "  Spot 3-5: ~4.0 PA (3 starter ABs + likely reliever in 4th PA)\n"
+    "  Spot 6-9: ~3.3 PA (often see bullpen in 2nd or 3rd PA)\n"
+    "  Hit prop value scales with PA count. Spot 1-2 hitters at same odds = better value.\n"
+    "  For HR props: spot 1-4 gets 3rd AB vs starter (6th-7th inning) = times-through bonus.\n\n"
+
+    "ML JUICE CHECK:\n"
+    "  -200 ML = implied 66.7% win probability. Only bet if you have genuine edge ABOVE that.\n"
+    "  -185 ML = 64.9%. If you have 3-4 factors but odds are -185, note juice is steep.\n"
+    "  Sweet spot for ML value: -130 to -160 with 3+ factors = real edge.\n"
+    "  Always note implied probability vs your confidence. Don't just pick direction — price matters.\n\n"
+
+    "COLD gap +.000-.010 = NEUTRAL, not a buy signal. Only gaps >=+.020 are meaningful COLD.\n\n"
+
+
 
     "DATA RULES: Every number from pre-computed context only. No substitutions. "
 
@@ -2019,9 +2032,14 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
                         if ops:
                             form_str += f' OPS={ops:.3f}'
 
+            pos = b.get('lineup_pos', 5)
+            pa_est = 4.5 if pos <= 2 else (4.0 if pos <= 5 else 3.3)
+            pa_str = f'~{pa_est}PA'
+
             lines.append(
-                f"  #{b.get('lineup_pos','?')} {proxy}{b.get('name','?')} ({b.get('hand','?')}HB) | "
-                f"SCORE={score}/4 GRADE={grade} | plat={platoon} | gap={gs}({gap_flag}){hr_cap}{u11}{u12}"
+                f"  #{pos} {proxy}{b.get('name','?')} ({b.get('hand','?')}HB) | "
+                f"SCORE={score}/4 GRADE={grade} | plat={platoon} | {pa_str} | "
+                f"gap={gs}({gap_flag}){hr_cap}{u11}{u12}"
                 f"{wind_adj_str}{hr9_bonus_str}{form_str} | wOBA={b.get('woba','N/A')} | {breakdown}"
             )
 
