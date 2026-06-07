@@ -55,10 +55,10 @@ BATTER GRADE (0-4 pts):
   4/4=elite | 3/4=strong | 2/4=moderate | 1/4=weak | 0/4=fade
 
 HPI THRESHOLDS (use Adj-HPI for final grade label):
-  Adj-HPI>=6.5=A | 5.0-6.4=A- | 4.0-4.9=B+ | 3.0-3.9=B | <3.0=fade
+  Adj-HPI>=7.0=A | 5.5-6.9=A- | 4.0-5.4=B+ | 3.0-3.9=B | <3.0=fade
   Adj-HPI = base HPI - platoon penalty - gate penalty +/- gap/park/pitcher bonuses
   HALF gate (2/4) = -0.5 HPI | CLOSED gate (3/4) = -1.0 HPI
-  SAME platoon = -0.5 HPI (-0.3 if Barrel%>=15)
+  SAME platoon = -0.5 HPI (-0.3 if Barrel%>=15) | FAV platoon = 0 (no HPI added, just avoids penalty)
   Pitcher HR/9>=1.8 = +0.75 HPI to batters | HR/9>=1.5 = +0.5 | HR/9>=1.2 = +0.25
 
 CONTACT METRICS (all from statcast CSV, calibrated to real 2026 distributions):
@@ -113,7 +113,7 @@ SYSTEM_PROMPT = (
     "POWER PROFILE:\n"
     "  Every batter has a pre-computed HR POWER INDEX (HPI, 0-10) cross-referencing ALL power signals.\n"
     "  HPI>=7.0 = A-grade HR candidate. HPI 5.0-6.9 = A- candidate. HPI 4.0-4.9 = B+ pick.\n"
-    "  Adj-HPI>=6.5=A | 5.0-6.4=A- | 4.0-4.9=B+ | 3.0-3.9=B | <3.0=fade.\n"
+    "  Adj-HPI>=7.0=A | 5.5-6.9=A- | 4.0-5.4=B+ | 3.0-3.9=B | <3.0=fade.\n"
     "  Adjusted HPI>=4.0 = list it. Adjusted HPI 3.0-3.9 = sleeper only. <3.0 = fade.\n"
     "  GRADE LABEL must match Adj-HPI: don't call a 4.0 HPI batter 'B+' — that's B+.\n"
     "    4.0 = B+, 3.5 = B, 6.5 = A. Be precise. Grade determines bet sizing.\n\n"
