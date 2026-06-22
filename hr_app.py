@@ -1523,7 +1523,7 @@ Return ONLY a JSON array, no other text:
 Input to parse:
 {raw}"""
 
-    resp = call_claude([{{'role': 'user', 'content': prompt}}], max_tokens=4000, model=MODEL_FAST)
+    resp = call_claude([{'role': 'user', 'content': prompt}], max_tokens=4000, model=MODEL_FAST)
     try:
         m = re.search(r'\[.*\]', resp, re.DOTALL)
         if m:
@@ -1617,7 +1617,7 @@ def generate_parlays(all_game_picks, game_summaries):
     ctx = "\n".join(lines)
     
     result = call_claude(
-        [{{'role': 'user', 'content': ctx}}],
+        [{'role': 'user', 'content': ctx}],
         system=PARLAY_SYSTEM,
         max_tokens=4000
     )
