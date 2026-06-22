@@ -22,6 +22,7 @@ CURRENT_YEAR = 2026
 PORT = int(os.environ.get('PORT', 8080))
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 MODEL = 'claude-sonnet-4-5'
+MODEL_FAST = 'claude-haiku-4-5'  # For mechanical tasks: parsing, extraction, JSON
 
 _HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
@@ -350,9 +351,9 @@ def savant_get(url, timeout=15, accept_json=False):
     except Exception:
         return None
 
-def call_claude(messages, system=None, max_tokens=4096):
+def call_claude(messages, system=None, max_tokens=4096, model=None):
     payload = {
-        'model': MODEL,
+        'model': model or MODEL,
         'max_tokens': max_tokens,
         'stream': True,
         'messages': messages,
@@ -1469,7 +1470,7 @@ Return this exact JSON structure:
 Lineup to parse:
 {raw}"""
 
-    resp = call_claude([{'role': 'user', 'content': prompt}], max_tokens=2000)
+    resp = call_claude([{'role': 'user', 'content': prompt}], max_tokens=2000, model=MODEL_FAST)
     try:
         m = re.search(r'\{.*\}', resp, re.DOTALL)
         if m:
@@ -1522,7 +1523,7 @@ Return ONLY a JSON array, no other text:
 Input to parse:
 {raw}"""
 
-    resp = call_claude([{{'role': 'user', 'content': prompt}}], max_tokens=4000)
+    resp = call_claude([{{'role': 'user', 'content': prompt}}], max_tokens=4000, model=MODEL_FAST)
     try:
         m = re.search(r'\[.*\]', resp, re.DOTALL)
         if m:
@@ -2439,7 +2440,7 @@ Each pick: {{"name":"First Last","team":"team","game":"Away @ Home","type":"HR"/
 Analyses:
 {combined_analysis[:8000]}"""
 
-        picks_raw = call_claude([{'role': 'user', 'content': picks_prompt}], max_tokens=2000)
+        picks_raw = call_claude([{'role': 'user', 'content': picks_prompt}], max_tokens=2000, model=MODEL_FAST)
         all_picks = []
         try:
             m = re.search(r'\[.*\]', picks_raw, re.DOTALL)
