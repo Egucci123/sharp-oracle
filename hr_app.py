@@ -243,7 +243,28 @@ SYSTEM_PROMPT = (
 
 
 
-    "DATA RULES: Every number from pre-computed context only. No substitutions. "
+    "DART PICKS — C-DART and B-DART flags in context mean:\n"
+    "  C-DART: Long-shot HR pick (+400 or better) the data supports despite low grade.\n"
+    "  B-DART: Mid-range HR pick (+300 or better) with real power signal hidden by metrics.\n"
+    "  When you see [#11:4/4-FAV-1-5->C-DART] = include as SLEEPER HR if HPI>=3.0 after adj.\n"
+    "  When you see [#12:ELITE-BARREL+BOOSTER->B-DART] = include as SLEEPER HR pick.\n"
+    "  When you see [#5:LATE-BULLPEN-ERA5.xx->HIT-LIVE] = include as SLEEPER HIT regardless of grade.\n\n"
+
+    "PITCHER GAP NOTE: Pitcher gap direction is OPPOSITE to batters.\n"
+    "  Pitcher positive gap (xwOBA > wOBA) = pitcher is BETTER than results show = tighten gate.\n"
+    "  Pitcher negative gap (wOBA > xwOBA) = pitcher has been LUCKY = expect more hits coming.\n"
+    "  PITCHER-LUCKY flag in context = opens gate half step even if score says HALF/CLOSED.\n\n"
+
+    "MAX HIT SPEED — ceiling power signal:\n"
+    "  MAX-SPEED>=115 = top-1% ceiling contact. Even if EV50 is average, he can go nuclear.\n"
+    "  Market prices averages. You price ceiling. A batter with MAX-SPEED=116 and EV50=100\n"
+    "  has more HR upside than a batter with EV50=103 and MAX-SPEED=108.\n"
+    "  Combine MAX-SPEED>=115 with OPEN gate + FAV platoon = automatic sleeper candidate.\n\n"
+
+    "LINEUP SPOT = PA EDGE:\n"
+    "  Spot #1-2 with wOBA>=.330 vs HITTABLE pitcher (gate 0-1) = near-lock hit anchor.\n"
+    "  Spot #1-2 always call out the ~4.5PA advantage explicitly in picks.\n"
+    "  Spot #6-9 with [#5:LATE-BULLPEN] flag = bullpen exposure edge for hits.\n\n"
 
     "GAP=xwOBA-wOBA. Positive=COLD. Negative=HOT. [PROXY]=no 2026 data, max B.\n\n"
 
@@ -287,8 +308,16 @@ SYSTEM_PROMPT = (
 
     "ML/TOTALS RULES:\n"
     "ML: need 3+ — xwOBA gap>0.050 | bullpen tier edge | run diff>20 | W4+ streak (W2/W3 = NOT meaningful) | home field.\n"
-    "OVER: both gates 0-1 + wind OUT 8mph+ + temp>80F + weak pen >5.00 ERA.\n"
-    "UNDER: both gates 2+ + wind IN 8mph+ + cold <55F + strong pens <3.50 ERA.\n\n"
+    "  If juice is -145 or better AND 3 factors align = take it. If juice is -185+ = need 4+ factors.\n"
+    "  Think about what the market is mispricing: a team's FORM14 hot stretch + starter on STRUGGLING\n"
+    "  stretch = real ML edge even if season stats say otherwise. Check FORM14 data in context.\n"
+    "OVER: both pitchers hittable (gate 0-1) + wind OUT 8mph+ + temp>80F + weak pen >5.00 ERA.\n"
+    "  OVER lean at 2 factors when wind OUT is very strong (12mph+) — wind alone changes run environment.\n"
+    "UNDER: both pitchers elite (gate 2+) + wind IN 8mph+ + cold <55F + strong pens <3.50 ERA.\n"
+    "  UNDER lean at 2 factors when both starters are CLOSED (3-4/4) + DOME environment.\n"
+    "  Grounder pitcher (GB%>50) + wind IN = UNDER lean regardless of other factors.\n"
+    "Sharp OVER plays: STRUGGLING pitcher (ERA>6 last 14 days) with OPEN gate in warm outdoor park.\n"
+    "Sharp UNDER plays: DOME + two CLOSED gates + combined pens ERA<4.0 = score under 7.\n\n"
     + LOCKED_RULES
 )
 
@@ -1552,86 +1581,120 @@ Input to parse:
     return []
 
 
-PARLAY_SYSTEM = """You are Marcus Cole, sharp MLB prop bettor building cross-game parlays.
-You have picks from multiple games. Build ALL required parlays below using sharp outside-the-box thinking.
+PARLAY_SYSTEM = """You are Marcus Cole, sharp MLB prop bettor. Build the sharpest cross-game parlays from today's picks.
 
-PARLAY PHILOSOPHY:
-1. VALUE OVER GRADE: HPI 5.0 at +600 beats HPI 6.0 at +200 in a parlay.
-2. STACK PITCHER VULNERABILITY: HR/9>=1.5 pitchers = stack their victims across DIFFERENT games.
-3. ABSOLUTE RULE — NO SAME-GAME HR PARLAYS: One HR leg per game maximum. ZERO exceptions.
-4. MAX 2 LEGS PER GAME IN HIT PARLAYS. Spread across 3+ games minimum.
-5. COLD GAP VALUE: xwOBA>wOBA by .030+ = market mispricing. Stack these.
-6. AVOID HOT GAP batters unless wOBA>=.380 genuine elite.
-7. BOOSTER PARKS (GABP 1.35, Yankee 1.28, CBP 1.22) = bonus HR carry. Stack when available.
-8. DOME ANCHOR: Dome games = weather-neutral safe legs.
-9. SMALL SAMPLE = DISQUALIFY: Brl%>25 with <20 BBE = noise not signal.
-10. DO NOT FORCE PICKS: If you don't have enough qualifying legs for a parlay size, 
-    write "NO QUALIFYING [X]-LEG HR PARLAY — insufficient independent legs" and skip it.
-    Quality over quantity. Never manufacture fake edges to fill a slot.
+THINK LIKE A SHARP — in this order:
+1. Who are the most HR-vulnerable pitchers today (HR/9>=1.5)? Their victims are your HR parlay base.
+2. Which games have wind OUT boosting carry? Stack those power bats.
+3. Which batters have massive COLD gaps the market is ignoring? Regression bombs at plus money.
+4. Which domes anchor hit parlays with weather certainty?
+5. Best odds concentrations? A +600 leg in a parlay changes the math entirely.
+6. Who has 4.5 PA from leadoff vs a hittable pitcher? Near-lock hit anchors.
+7. What's UNIQUE today that won't repeat tomorrow? Find that angle and exploit it.
 
-HR DIST HARD STOP: Wind-adjusted dist<370ft = DISQUALIFIED from any HR parlay. ZERO exceptions.
+HARD RULES:
+- NO same-game HR parlays. One HR leg per game. ZERO exceptions.
+- MAX 2 legs per game in hit parlays. Spread across 3+ games.
+- Wind-adjusted HR dist <370ft = DISQUALIFIED.
+- Only ML/Totals picks EXPLICITLY confirmed in analyses. Never manufacture.
+- DO NOT FORCE: "NO QUALIFYING X-LEG PARLAY" is valid.
 
-REQUIRED OUTPUT — build ALL of these in order:
+VARIABILITY IS REQUIRED — each parlay size needs a DIFFERENT angle:
+- 2-leg HR: best 2 pitcher-vulnerability victims across different games
+- 3-leg HR: add environmental edge (wind OUT + dome + booster park stack)
+- 4-leg HR: add best value long shot (+500+) the market is ignoring
+- 5-leg HR: include one contrarian pick others are fading but data supports
+- Hit parlays: rotate themes — leadoff volume, COLD gap regression, dome anchors, weak pen exposure, times-through-order stacks
+- Never just add one leg to the previous parlay. Find what makes each size uniquely optimal.
 
-## HR PARLAYS (use best qualified picks from per-game analyses)
+REQUIRED SECTIONS (complete all):
 
-### HR SINGLE BEST PICK
-[Name] | [Team] | [Game] | [Odds] — the single best HR candidate on the entire slate
-[2 sentences: why this is the best individual HR play]
+## HR PARLAYS
 
-### 2-LEG HR PARLAY
-OR: NO QUALIFYING 2-LEG HR PARLAY
+### BEST SINGLE HR PICK
+[Name | Team | Game | Odds]
+[2 sentences: what makes this the top HR play TODAY specifically]
 
-### 3-LEG HR PARLAY  
-OR: NO QUALIFYING 3-LEG HR PARLAY
+### 2-LEG HR PARLAY | ~[odds] | [HIGH/MEDIUM/LOW]
+Legs: [name (team) | game | odds] x2
+Edge: [what cross-game angle connects these two specifically]
 
-### 4-LEG HR PARLAY
-OR: NO QUALIFYING 4-LEG HR PARLAY
+### 3-LEG HR PARLAY | ~[odds] | [confidence]
+Legs: [list]
+Edge: [the specific angle — pitcher stack / environmental / value concentration]
 
-### 5-LEG HR PARLAY
+### 4-LEG HR PARLAY | ~[odds] | [confidence]
+Legs: [list]  
+Edge: [different angle from 3-leg]
+
+### 5-LEG HR PARLAY | ~[odds] | [confidence]
+Legs: [list]
+Edge: [what makes this the right 5th leg]
 OR: NO QUALIFYING 5-LEG HR PARLAY
 
 ---
+## HIT PARLAYS
 
-## HIT PARLAYS (use best hit picks from per-game analyses)
+### 2-LEG HIT PARLAY | ~[odds] | [confidence]
+Theme: [e.g. "Elite wOBA vs OPEN gates"]
+Legs: [name (team) | game | odds] x2
 
-### 2-LEG HIT PARLAY
-### 3-LEG HIT PARLAY
-### 4-LEG HIT PARLAY
-### 5-LEG HIT PARLAY
-### 6-LEG HIT PARLAY
-### 7-LEG HIT PARLAY
-### 8-LEG HIT PARLAY
-### 9-LEG HIT PARLAY
-### 10-LEG HIT PARLAY
-### 11-LEG HIT PARLAY
-### 12-LEG HIT PARLAY
-(For each: list legs, parlay odds, confidence. If insufficient legs: "NO QUALIFYING X-LEG HIT PARLAY")
+### 3-LEG HIT PARLAY | ~[odds] | [confidence]
+Theme: [e.g. "Leadoff volume stack"]
 
----
+### 4-LEG HIT PARLAY | ~[odds] | [confidence]
+Theme: [e.g. "COLD gap regression buy"]
 
-## ML/TOTALS MIX PARLAYS (best 5 — can combine ML + OVER/UNDER)
-Rules for ML/Totals parlays:
-- Only include ML or Totals picks that were EXPLICITLY picked in the per-game analyses (not forced)
-- NO ML pick = do not add it to ML parlay regardless of apparent edge
-- NO TOTALS pick = do not add it to totals parlay
-- Never manufacture ML/Totals picks just to fill a parlay slot
-- Combine confirmed ML picks with confirmed Totals picks across different games
-- Show which games had confirmed picks and explain the correlation/diversification angle
+### 5-LEG HIT PARLAY | ~[odds] | [confidence]
+Theme: [e.g. "Dome anchors + weak pen exposure"]
 
-### ML/TOTALS MIX PARLAY #1 (2-3 legs, highest confidence)
-### ML/TOTALS MIX PARLAY #2 (3-4 legs)
-### ML/TOTALS MIX PARLAY #3 (4-5 legs)
-### ML/TOTALS MIX PARLAY #4 (5 legs, wider diversity)
-### ML/TOTALS MIX PARLAY #5 (longest shot mix)
+### 6-LEG HIT PARLAY | ~[odds] | [confidence]
+Theme: [vary from above]
+
+### 7-LEG HIT PARLAY | ~[odds] | [confidence]
+
+### 8-LEG HIT PARLAY | ~[odds] | [confidence]
+
+### 9-LEG HIT PARLAY | ~[odds] | [confidence]
+
+### 10-LEG HIT PARLAY | ~[odds] | [confidence]
+
+### 11-LEG HIT PARLAY | ~[odds] | [confidence]
+
+### 12-LEG HIT PARLAY | ~[odds] | [confidence]
 
 ---
+## ML/TOTALS MIX PARLAYS
 
+CONFIRMED picks are listed above. These are your PRIMARY ingredients.
+
+OUTSIDE-THE-BOX ML/TOTALS RULES:
+You may also consider games where the data is CLEAR even if the per-game analysis hedged:
+- If a team has 4+ ML factors (pitcher gap, run diff, bullpen, home field) but the analysis said
+  "PASS" due to juice — you CAN include it in a parlay at reduced confidence
+- If wind is blowing OUT 10mph+ at both parks in two games — you CAN stack both as OVER
+- If both starters are CLOSED gates (score 3-4) in two different games — you CAN parlay both UNDERs
+- A grounder pitcher (GB%>50) + wind IN = automatic UNDER lean even if not explicitly picked
+- DOME game with two CLOSED gates + both pens ERA<4.0 = UNDER lean regardless
+- Team on W5+ streak with positive run diff facing a STRUGGLING pitcher = ML lean even without 3 strict factors
+
+The goal: find 5 ML/Totals parlays at different confidence levels.
+Some will be "confirmed pick" parlays. Some will be "sharp lean" parlays. Label them clearly.
+NEVER combine a confirmed ML with a game that explicitly said "NO ML EDGE" — only stretch into unconfirmed when the DATA genuinely supports it.
+
+### ML/TOTALS MIX #1 | ~[odds] | [HIGH — confirmed picks only]
+### ML/TOTALS MIX #2 | ~[odds] | [MEDIUM — mix of confirmed + sharp lean]
+### ML/TOTALS MIX #3 | ~[odds] | [MEDIUM]
+### ML/TOTALS MIX #4 | ~[odds] | [LOW — aggressive lean parlay]
+### ML/TOTALS MIX #5 | ~[odds] | [LOTTERY — max legs, all valid data angles]
+
+---
 ## SHARP SUMMARY
-- Best single HR play: [name, odds, why]
-- Best hit parlay: [which one and why]
-- Best ML/Totals mix: [which one and why]
-- DO NOT BET: [picks that look tempting but fail rules]
+- **Best single HR**: [name | odds | the specific data edge]
+- **Best hit parlay**: [size | odds | why this structure today]
+- **Best ML/Totals**: [if any confirmed picks exist]
+- **Contrarian call**: [one pick going against conventional wisdom with data support]
+- **DO NOT BET**: [what looks tempting but fails — be specific about why]
 """
 
 
@@ -2043,7 +2106,13 @@ def compute_batter_score(b):
         f"EV={ev or 'N/A'}{'✓' if ev and ev>=91 else '✗'}",
         f"HH%={hh or 'N/A'}{'✓' if hh and hh>=hh_threshold else '✗'}",
     ]
-    extra = ev50_flag + ss_flag + fbld_flag + hr_stop + brl_pa_flag + gap_stop + hpi_str
+    # Max hit speed — ceiling power signal (different from avg EV50)
+    mhs = b.get('max_hit_speed')
+    mhs_flag = ''
+    if mhs and mhs >= 115: mhs_flag = f' MAX-SPEED={mhs}(ELITE-ceiling)'
+    elif mhs and mhs >= 112: mhs_flag = f' MAX-SPEED={mhs}(PLUS-ceiling)'
+
+    extra = ev50_flag + ss_flag + fbld_flag + hr_stop + brl_pa_flag + mhs_flag + gap_stop + hpi_str
     upgrade_flags = upgrade2_flag + upgrade3_flag + upgrade10_flag + upgrade14_flag
     return score, ' | '.join(pts) + extra + upgrade_flags, gap_flag, hr_cap
 
@@ -2119,10 +2188,16 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
                     ptrend = 'HOT-STRETCH' if era14 <= 2.50 else ('STRUGGLING' if era14 >= 6.00 else 'NEUTRAL')
                     pitcher_form_str = f' | FORM14=ERA{era14:.2f}({ip14}IP,{hr14}HR){ptrend}'
 
+        # Pitcher gap: positive = pitcher BETTER than wOBA suggests (opposite of batter)
+        gap_note = ''
+        if g is not None:
+            if g > 0.030:   gap_note = '(PITCHER-OUTPERFORMING-xwOBA->gate-may-be-soft)'
+            elif g < -0.030: gap_note = '(PITCHER-LUCKY->expect-more-hits-coming)'
+
         lines.append(
             f"  {proxy}{p.get('name','?')} ({p.get('hand','?')}HP) "
             f"pitches for {p.get('team','?')}, FACES {faces} batters | "
-            f"GATE={score}/4={gate} | gap={gs}{pitcher_form_str} | {breakdown}"
+            f"GATE={score}/4={gate} | gap={gs}{gap_note}{pitcher_form_str} | {breakdown}"
         )
 
     # Bullpen ERA
@@ -2203,6 +2278,22 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
             if brl >= 20 and park_cat == 'BOOSTER' and platoon in ('FAV','FAV(SW)'):
                 u12 = ' [#12:ELITE-BARREL+BOOSTER->B-DART]'
 
+            # Upgrade #5: Late Bullpen — spots 5-9 vs weak pen = flag for hits
+            u5 = ''
+            pen_data = pen_era.get(opp, {})
+            opp_pen_era = pen_data.get('era') if pen_data else None
+            if opp_pen_era and opp_pen_era >= 5.00 and pos >= 5:
+                brl = b.get('barrel_pct') or 0
+                xw = b.get('xwoba') or 0
+                if brl >= 15 and xw >= 0.350:
+                    u5 = f' [#5:LATE-BULLPEN-ERA{opp_pen_era:.2f}->HIT-LIVE]'
+
+            # Upgrade #13: No 2026 data = max B-grade cap already handled by PROXY tag
+            # Add explicit flag if proxy
+            u13 = ''
+            if b.get('fetch_status','') and 'no stat' in str(b.get('fetch_status','')):
+                u13 = ' [#13:NO-2026-DATA->MAX-B]'
+
             # Store HPI in batter dict for table display
             if 'HPI=' in breakdown:
                 try:
@@ -2244,7 +2335,7 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
             lines.append(
                 f"  #{pos} {proxy}{b.get('name','?')} ({b.get('hand','?')}HB) | "
                 f"SCORE={score}/4 GRADE={grade} | plat={platoon} | {pa_str} | "
-                f"gap={gs}({gap_flag}){hr_cap}{u11}{u12}"
+                f"gap={gs}({gap_flag}){hr_cap}{u5}{u11}{u12}{u13}"
                 f"{wind_adj_str}{hr9_bonus_str}{form_str} | wOBA={b.get('woba','N/A')} | {breakdown}"
             )
 
@@ -2555,36 +2646,68 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
                 'pen_summary': ' | '.join(f"{t}={d.get('era','?')}" for t,d in env['pen_era'].items()),
             })
 
-        # Build parlay context directly from game data (no extraction step)
-        # Pass per-game picks summary + environments directly to parlay Claude
+        # Build parlay context directly from game data
         parlay_ctx_lines = ["=== SLATE PICKS FOR PARLAY CONSTRUCTION ===\n"]
-        parlay_ctx_lines.append("GAME ENVIRONMENTS:")
-        for gs in game_summaries:
-            parlay_ctx_lines.append(
-                f"  {gs['game']}: {gs['park']} [{gs['park_cat']}] | "
-                f"{gs['temp']}F | Wind: {gs['wind_label']} | Pens: {gs['pen_summary']}")
 
-        parlay_ctx_lines.append("\n\nPER-GAME ANALYSES (extract picks from ## PICKS sections):")
-        # Include full per-game analyses so parlay Claude sees all picks
-        for i, ga in enumerate(game_analyses):
-            # Extract just the PICKS section to save tokens
+        # Game environments with wind/park/pen context
+        parlay_ctx_lines.append("GAME ENVIRONMENTS:")
+        for gd in game_data:
+            env = gd['env']
+            g = env['game']
+            wi = env['weather'].get('wind_impact', {}) or {}
+            game_label = f"{g.get('away_team','?')} @ {g.get('home_team','?')}"
+            pen_str = ' | '.join(f"{t}={d.get('era','?')}" for t,d in env['pen_era'].items())
+            parlay_ctx_lines.append(
+                f"  {game_label}: {env['park_name']} [{env['park_cat']}] | "
+                f"{env['weather'].get('temp_f','?')}F | Wind: {wi.get('label','unknown')} | "
+                f"Pens: {pen_str}")
+
+        # Per-game picks — include game label + full picks section
+        parlay_ctx_lines.append("\n\nPER-GAME PICKS (HR, HIT, SLEEPER, ML, TOTALS):")
+        ml_totals_found = []
+
+        for i, (ga, gd) in enumerate(zip(game_analyses, game_data)):
+            env = gd['env']
+            g = env['game']
+            game_label = f"{g.get('away_team','?')} @ {g.get('home_team','?')}"
+
+            # Extract picks section
             picks_start = ga.find('## PICKS')
             reads_start = ga.find('## GAME READS')
             if picks_start >= 0 and reads_start >= 0:
-                picks_section = ga[picks_start:reads_start]
+                picks_section = ga[picks_start:reads_start].strip()
             elif picks_start >= 0:
-                picks_section = ga[picks_start:picks_start+3000]
+                picks_section = ga[picks_start:].strip()
             else:
-                picks_section = ga[:2000]
-            parlay_ctx_lines.append(picks_section[:3000])
+                picks_section = ga[:3000]
 
+            # Add game label header
+            parlay_ctx_lines.append(f"\n--- {game_label} ---")
+            parlay_ctx_lines.append(picks_section[:5000])
+
+            # Separately extract ML/Totals from the FULL analysis (not truncated)
+            for line in ga.split('\n'):
+                s = line.strip()
+                is_ml = s.startswith('**ML:') and 'NO ML EDGE' not in s and 'NO ML' not in s.upper()[:20]
+                is_tot = s.startswith('**TOTALS:') and 'NO TOTALS EDGE' not in s and 'NO TOTALS' not in s.upper()[:25]
+                if is_ml or is_tot:
+                    ml_totals_found.append((game_label, s))
+
+        # Explicit ML/Totals summary
+        parlay_ctx_lines.append("\n\n=== CONFIRMED ML/TOTALS PICKS ACROSS SLATE ===")
+        if ml_totals_found:
+            for game_label, pick_line in ml_totals_found:
+                parlay_ctx_lines.append(f"  [{game_label}] {pick_line}")
+        else:
+            parlay_ctx_lines.append("  (No explicit ML/Totals picks found — use outside-the-box rules from environment data)")
+
+        # Final instructions
         parlay_ctx_lines.append(
-            "\n\nBUILD THE BEST PARLAYS using the picks above."
-            "\nREMINDER OF HARD RULES:"
-            "\n- NO same-game HR parlays (exception only at +700+ with different pitchers)"
-            "\n- MAX 2 legs per game in hit parlays"
-            "\n- PRIORITIZE pitcher vulnerability stacks: find HR/9>=1.5 pitchers, stack their victims across different games"
-            "\n- Use ALL picks from ALL games above — don't improvise new picks"
+            "\n\nBUILD ALL REQUIRED PARLAYS using the picks and environments above."
+            "\nHARD RULES: No same-game HR parlays. Max 2 legs/game in hit parlays."
+            "\nFor ML/Totals: use confirmed picks first, then apply outside-the-box rules"
+            " (wind stacks, grounder pitcher + wind IN = UNDER, DOME + two CLOSED gates = UNDER lean, etc)"
+            "\nBe creative and vary each parlay size — different themes, different angles."
         )
 
         parlay_analysis = call_claude(
