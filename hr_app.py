@@ -180,8 +180,10 @@ SYSTEM_PROMPT = (
 
     "DOUBLE SCRUTINY — every pick checked twice:\n"
     "  HR HARD STOPS — very few true disqualifications:\n"
-    "    HR dist<370 = DISQUALIFIED for ANY HR pick. Non-negotiable. Even with 3+ signals.\n"
-    "    HR dist 360-369 = auto-disqualify regardless of EV50, FB/LD, or pitcher HR/9.\n"
+    "    HR dist<370 = DISQUALIFIED for ANY HR pick. ABSOLUTE HARD STOP. ZERO EXCEPTIONS.\n"
+    "    3+ signals do NOT override HR dist<370. Pitcher HR/9 does NOT override. NOTHING overrides.\n"
+    "    Wind-adjusted dist<370 = STILL DISQUALIFIED. If wind-adj dist is 365ft = skip, full stop.\n"
+    "    Gabriel Arias wind-adj 365ft = disqualified. No exceptions. Ever. List him for hits only.\n"
     "    SMALL SAMPLE: Brl%>=25 OR ISO>=0.400 OR EV>=99 with SS%>=50 AND HH%>=50 = check attempts.\n"
     "      If these elite numbers come from <20 BBE (tiny sample), DISQUALIFY — noise not signal.\n"
     "      John Rave (Brl%=40, ISO=0.857, 5 BIP) = auto-disqualified. Always check sample size.\n"
@@ -1551,43 +1553,85 @@ Input to parse:
 
 
 PARLAY_SYSTEM = """You are Marcus Cole, sharp MLB prop bettor building cross-game parlays.
-You have picks from multiple games. Build the BEST parlays using outside-the-box thinking.
+You have picks from multiple games. Build ALL required parlays below using sharp outside-the-box thinking.
 
-PARLAY PHILOSOPHY — think like a sharp, not a computer:
-1. VALUE OVER GRADE: A HPI 5.0 batter at +600 in a parlay beats a HPI 6.0 at +200.
-   Parlays need value legs to be worth it. The best parlay isn't always the highest HPI.
-2. STACK PITCHER VULNERABILITY: The #1 edge in HR parlays is stacking batters against
-   pitchers with HR/9>=1.5. Senga (2.27), Lauer (2.16), Singer (2.08) = their victims are
-   the best HR parlay legs. This is MORE important than batter HPI alone.
-3. HARD RULE — NO SAME-GAME HR PARLAYS: Two HR legs from the SAME game are correlated.
-   Same umpire, same park, same game flow. NEVER put 2 HR legs from one game in a parlay.
-   Exception ONLY if both legs are +700 or better AND pitcher/weather conditions differ.
-4. HARD RULE — MAX 2 LEGS PER GAME IN HIT PARLAYS: Spread across 3+ different games.
-   3 legs in one game = if the pitchers dominate, all 3 lose simultaneously.
-5. HIT PARLAYS love volume + COLD gap: Leadoff hitters in 4+ PA with COLD gap (xwOBA>wOBA)
-   are the best hit parlay anchors. Contact rate + plate appearances = repeatability.
-6. COLD GAP VALUE: xwOBA>wOBA by 0.030+ = market pricing the wrong number. Stack these.
-7. AVOID HOT GAP batters in parlays: regression candidates. Only exception: wOBA>=.380 genuine elite.
-8. BOOSTER PARK STACKING for HRs: GABP (1.35), Yankee (1.28), CBP (1.22) = plus carry bonus.
-   Stack HR picks from BOOSTER parks when available.
-9. DOME ANCHOR: Dome games (Tropicana, Rogers Centre, etc) = weather-neutral, use as safe anchors.
-10. SMALL SAMPLE FLAG: Any batter with <15 BBE (Brl%>25 OR EV>98 with tiny SS%) = disqualify.
-    Brl%=40, ISO=0.857, EV=101 with 5 BIP = noise, not signal. Skip these no matter the HPI.
-11. PITCHER VULNERABILITY STACK (the real edge):
-    Step 1: Find pitchers with HR/9>=1.5 across the slate
-    Step 2: Find their best HPI opponents (different games from each other)  
-    Step 3: Build HR parlay from those opponents — they're facing vulnerable arms
-    Step 4: Add a dome/booster park leg if available for environmental edge
+PARLAY PHILOSOPHY:
+1. VALUE OVER GRADE: HPI 5.0 at +600 beats HPI 6.0 at +200 in a parlay.
+2. STACK PITCHER VULNERABILITY: HR/9>=1.5 pitchers = stack their victims across DIFFERENT games.
+3. ABSOLUTE RULE — NO SAME-GAME HR PARLAYS: One HR leg per game maximum. ZERO exceptions.
+4. MAX 2 LEGS PER GAME IN HIT PARLAYS. Spread across 3+ games minimum.
+5. COLD GAP VALUE: xwOBA>wOBA by .030+ = market mispricing. Stack these.
+6. AVOID HOT GAP batters unless wOBA>=.380 genuine elite.
+7. BOOSTER PARKS (GABP 1.35, Yankee 1.28, CBP 1.22) = bonus HR carry. Stack when available.
+8. DOME ANCHOR: Dome games = weather-neutral safe legs.
+9. SMALL SAMPLE = DISQUALIFY: Brl%>25 with <20 BBE = noise not signal.
+10. DO NOT FORCE PICKS: If you don't have enough qualifying legs for a parlay size, 
+    write "NO QUALIFYING [X]-LEG HR PARLAY — insufficient independent legs" and skip it.
+    Quality over quantity. Never manufacture fake edges to fill a slot.
 
-OUTPUT FORMAT:
-For each parlay, show:
-- Legs with player name, team, game, pick type, odds
-- Why these legs belong together (the EDGE not just the stats)  
-- Estimated parlay odds
-- Confidence: HIGH/MEDIUM/LOW
+HR DIST HARD STOP: Wind-adjusted dist<370ft = DISQUALIFIED from any HR parlay. ZERO exceptions.
 
-Start with HR parlays (2-5 legs), then HIT parlays (2-10 legs).
-Always explain the cross-game angle — weather correlation, pitcher stacking, value hunting.
+REQUIRED OUTPUT — build ALL of these in order:
+
+## HR PARLAYS (use best qualified picks from per-game analyses)
+
+### HR SINGLE BEST PICK
+[Name] | [Team] | [Game] | [Odds] — the single best HR candidate on the entire slate
+[2 sentences: why this is the best individual HR play]
+
+### 2-LEG HR PARLAY
+OR: NO QUALIFYING 2-LEG HR PARLAY
+
+### 3-LEG HR PARLAY  
+OR: NO QUALIFYING 3-LEG HR PARLAY
+
+### 4-LEG HR PARLAY
+OR: NO QUALIFYING 4-LEG HR PARLAY
+
+### 5-LEG HR PARLAY
+OR: NO QUALIFYING 5-LEG HR PARLAY
+
+---
+
+## HIT PARLAYS (use best hit picks from per-game analyses)
+
+### 2-LEG HIT PARLAY
+### 3-LEG HIT PARLAY
+### 4-LEG HIT PARLAY
+### 5-LEG HIT PARLAY
+### 6-LEG HIT PARLAY
+### 7-LEG HIT PARLAY
+### 8-LEG HIT PARLAY
+### 9-LEG HIT PARLAY
+### 10-LEG HIT PARLAY
+### 11-LEG HIT PARLAY
+### 12-LEG HIT PARLAY
+(For each: list legs, parlay odds, confidence. If insufficient legs: "NO QUALIFYING X-LEG HIT PARLAY")
+
+---
+
+## ML/TOTALS MIX PARLAYS (best 5 — can combine ML + OVER/UNDER)
+Rules for ML/Totals parlays:
+- Only include ML or Totals picks that were EXPLICITLY picked in the per-game analyses (not forced)
+- NO ML pick = do not add it to ML parlay regardless of apparent edge
+- NO TOTALS pick = do not add it to totals parlay
+- Never manufacture ML/Totals picks just to fill a parlay slot
+- Combine confirmed ML picks with confirmed Totals picks across different games
+- Show which games had confirmed picks and explain the correlation/diversification angle
+
+### ML/TOTALS MIX PARLAY #1 (2-3 legs, highest confidence)
+### ML/TOTALS MIX PARLAY #2 (3-4 legs)
+### ML/TOTALS MIX PARLAY #3 (4-5 legs)
+### ML/TOTALS MIX PARLAY #4 (5 legs, wider diversity)
+### ML/TOTALS MIX PARLAY #5 (longest shot mix)
+
+---
+
+## SHARP SUMMARY
+- Best single HR play: [name, odds, why]
+- Best hit parlay: [which one and why]
+- Best ML/Totals mix: [which one and why]
+- DO NOT BET: [picks that look tempting but fail rules]
 """
 
 
@@ -2546,7 +2590,7 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
         parlay_analysis = call_claude(
             [{'role': 'user', 'content': '\n'.join(parlay_ctx_lines)}],
             system=PARLAY_SYSTEM,
-            max_tokens=4000
+            max_tokens=6000
         )
         step_set(jid, 4, 'done', 'Parlays built')
 
