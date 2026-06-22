@@ -1491,39 +1491,46 @@ def parse_multi_lineup(raw, game_date=None):
     Parse multiple games from MLB app format or any multi-game paste.
     Returns list of parsed game dicts, one per game.
     """
-    prompt = f"""You are parsing multiple MLB games from a single paste.
-The input may contain 1-10 games. Each game has:
-- Away team @ Home team
-- Stadium name
-- Home pitcher and away pitcher (with ERA and SO stats)
-- Two lineup columns (Away on left, Home on right)
+    prompt = f"""You are parsing multiple MLB games from the MLB app format.
 
-RULES:
-- Team before @ is AWAY. Team after @ is HOME.
-- Away pitcher faces HOME batters. Home pitcher faces AWAY batters.
-- Extract batter hand from the letter in parentheses: (R), (L), (S)
-- Lineup position = order they appear (1-9)
-- Include ALL batters, default hand to R if unknown
-- Return a JSON array, one object per game
+FORMAT: Each game block looks like:
+  AwayTeam
+  @
+  HomeTeam
+  (record) Time ParkName (record)
+  AwayPitcherFirstLast / RHP or LHP / ERA stats
+  HomePitcherFirstLast / RHP or LHP / ERA stats
+  Then TWO lineup columns side by side:
+    Left column = AWAY team batters (1-9)
+    Right column = HOME team batters (1-9)
+  Each batter line: "Name (H) POS" where H is R/L/S
 
-Return ONLY a JSON array, no other text:
+CRITICAL RULES:
+- Team BEFORE @ = AWAY team. Team AFTER @ = HOME team.
+- Away pitcher FACES HOME batters. Home pitcher FACES AWAY batters.
+- The two lineup columns appear side by side — split them correctly.
+- Extract hand from (R), (L), (S) after each name.
+- Include ALL 9 batters per team.
+- Multiple games appear sequentially — parse EACH game separately.
+
+Return ONLY a valid JSON array (one object per game), no other text:
 [
   {{
-    "away_team": "team name",
-    "home_team": "team name", 
-    "park_name": "stadium name or ?",
-    "game_time": "6:10 PM or ?",
-    "away_pitcher": {{"name": "First Last", "hand": "R/L", "era": "2.57"}},
-    "home_pitcher": {{"name": "First Last", "hand": "R/L", "era": "4.09"}},
-    "away_batters": [{{"name": "First Last", "hand": "R/L/S", "lineup_pos": 1, "position": "SS"}}],
-    "home_batters": [{{"name": "First Last", "hand": "R/L/S", "lineup_pos": 1, "position": "3B"}}]
+    "away_team": "Yankees",
+    "home_team": "Tigers",
+    "park_name": "Comerica Park",
+    "game_time": "6:10 PM",
+    "away_pitcher": {{"name": "Gerrit Cole", "hand": "R", "era": "2.57"}},
+    "home_pitcher": {{"name": "Framber Valdez", "hand": "L", "era": "4.09"}},
+    "away_batters": [{{"name": "Amed Rosario", "hand": "R", "lineup_pos": 1, "position": "3B"}}],
+    "home_batters": [{{"name": "Ben Rice", "hand": "L", "lineup_pos": 1, "position": "DH"}}]
   }}
 ]
 
 Input to parse:
 {raw}"""
 
-    resp = call_claude([{'role': 'user', 'content': prompt}], max_tokens=4000, model=MODEL_FAST)
+    resp = call_claude([{'role': 'user', 'content': prompt}], max_tokens=8000)
     try:
         m = re.search(r'\[.*\]', resp, re.DOTALL)
         if m:
@@ -2307,18 +2314,42 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
         jobs[jid]['is_slate'] = True
 
     try:
-        # STEP 1: Parse all games
-        step_set(jid, 0, 'active', 'Parsing slate...')
-        games = parse_multi_lineup(raw_lineup, game_date)
+        # Split multi-game input by the MLB app separator "Gameday\n\nTickets"
+        # Then parse each game individually using the reliable single-game parser
+        import re as _re
+        raw_blocks = _re.split(r'Gameday\s*\n+\s*Tickets\s*\n*', raw_lineup)
+        raw_blocks = [b.strip() for b in raw_blocks if b.strip()]
+        print(f"[SLATE] Detected {len(raw_blocks)} game block(s)")
+
+        if len(raw_blocks) <= 1:
+            # Single game or unrecognized format — use single game flow
+            print("[SLATE] Single game or unrecognized format, routing to run_job")
+            run_job(jid, sid, raw_lineup, game_date)
+            return
+
+        # Parse each block individually using the reliable single-game parser
+        # Run in parallel with Haiku for speed
+        def _parse_one(block):
+            try:
+                return parse_lineup(block, game_date)
+            except Exception as e:
+                print(f"[SLATE] Parse error on block: {e}")
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+            parsed_list = list(ex.map(_parse_one, raw_blocks))
+
+        games = [g for g in parsed_list if g and g.get('home_team', '?') != '?']
+        print(f"[SLATE] Successfully parsed {len(games)}/{len(raw_blocks)} games")
         if not games:
-            # Fall back to single game
-            print("[SLATE] No multi-game detected, running single game")
+            print("[SLATE] All parses failed, falling back to single game")
             run_job(jid, sid, raw_lineup, game_date)
             return
         if len(games) == 1:
-            print("[SLATE] Single game detected, running single game")
-            run_job(jid, sid, raw_lineup, game_date)
+            run_job(jid, sid, raw_blocks[0], game_date)
             return
+        print("[SLATE] Games: " + ", ".join(
+            f"{g.get('away_team','?')}@{g.get('home_team','?')}" for g in games))
 
         print(f"[SLATE] Parsed {len(games)} games")
         step_set(jid, 0, 'done', f'{len(games)} games parsed')
@@ -2339,7 +2370,37 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
             env_results = list(ex.map(_fetch_env, games))
-        step_set(jid, 1, 'done', f'Environments ready')
+        # Build and store per-game info for UI display
+        all_games_info = []
+        for env in env_results:
+            g = env['game']
+            wx = env['weather']
+            wi = wx.get('wind_impact', {}) or {}
+            pen = env['pen_era']
+            game_info = {
+                'game':         f"{g.get('away_team','?')} @ {g.get('home_team','?')}",
+                'park':         env['park_name'],
+                'category':     env['park_cat'],
+                'temp_f':       wx.get('temp_f'),
+                'condition':    wx.get('condition',''),
+                'wind_mph':     wx.get('wind_mph'),
+                'wind_dir':     wx.get('wind_dir',''),
+                'wind_impact':  wi.get('impact',''),
+                'wind_label':   wi.get('label',''),
+                'weather_flag': wx.get('flag','NEUTRAL'),
+                'bullpen':      {t: {'era': d.get('era'), 'tier': d.get('tier','?')}
+                                 for t, d in pen.items()},
+            }
+            all_games_info.append(game_info)
+
+        with store_lock:
+            jobs[jid]['all_games_info'] = all_games_info
+            # Also set park_confirm to first game for backward compat
+            if all_games_info:
+                jobs[jid]['park_confirm'] = all_games_info[0]
+                jobs[jid]['bullpen'] = all_games_info[0].get('bullpen', {})
+
+        step_set(jid, 1, 'done', f'{len(games)} environments ready')
 
         # STEP 3: Statcast fetch for all players across all games
         step_set(jid, 2, 'active', 'Fetching Statcast for all games...')
@@ -2375,12 +2436,17 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
         # Merge all statcast for combined table
         all_statcast_combined = []
         for gd in game_data:
+            g = gd['env']['game']
+            game_label = f"{g.get('away_team','?')}@{g.get('home_team','?')}"
+            for p in gd['all_statcast']:
+                p['game_label'] = game_label  # tag each player with their game
             all_statcast_combined.extend(gd['all_statcast'])
 
         slim_statcast = []
         for p in all_statcast_combined:
             slim_statcast.append({
                 'name': p.get('name'), 'role': p.get('role'), 'team': p.get('team'),
+                'game': p.get('game_label', ''),
                 'barrel_pct': p.get('barrel_pct'), 'exit_velocity': p.get('exit_velocity'),
                 'ev50': p.get('ev50'), 'hard_hit_pct': p.get('hard_hit_pct'),
                 'xwoba': p.get('xwoba'), 'woba': p.get('woba'), 'gap': p.get('gap'),
@@ -2696,12 +2762,12 @@ tr.pitcher-row td{background:#06090f}
   <div class="tbl-wrap" id="tblWrap">
       <table>
         <thead><tr>
-          <th>Player</th><th>Role</th><th>Team</th>
+          <th>Player</th><th>Role</th><th>Team</th><th>Game</th>
           <th>BRL%</th><th>EV</th><th>EV50</th><th>HH%</th>
           <th>xwOBA</th><th>wOBA</th><th>GAP</th><th>SS%</th>
           <th>FB%</th><th>ISO</th><th>HR/9</th><th>HPI</th><th>OK</th>
         </tr></thead>
-        <tbody id="statBody"><tr><td colspan="16" class="na" style="padding:20px;text-align:center">Run a lineup to populate</td></tr></tbody>
+        <tbody id="statBody"><tr><td colspan="17" class="na" style="padding:20px;text-align:center">Run a lineup to populate</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -2755,7 +2821,11 @@ function poll(){
   .then(d=>{
     pollErrors=0;
     updateSteps(d.steps||[]);
-    if(d.park_confirm&&Object.keys(d.park_confirm).length) showInfo(d.park_confirm,d.bullpen||{});
+    if(d.all_games_info&&d.all_games_info.length>1){
+      showSlateInfo(d.all_games_info);
+    } else if(d.park_confirm&&Object.keys(d.park_confirm).length) {
+      showInfo(d.park_confirm,d.bullpen||{});
+    }
 
     // Fetch statcast separately when ready  -  small focused request
     if(d.has_statcast){
@@ -2831,6 +2901,8 @@ function showInfo(p,pen){
   const wc=(p.weather_flag||'').includes('SUPPRESSOR')||(p.weather_flag||'')==='DOME'?'warn':(p.weather_flag||'').includes('BOOST')?'good':'';
   const temp=p.temp_f?p.temp_f+'F':'N/A';
   const wind=p.wind_mph?p.wind_mph+' mph':'N/A';
+  const windDir=p.wind_dir?` ${p.wind_dir}`:'';
+  const windImpact=p.wind_label?`<div class="pill" style="font-size:10px">Wind Impact: <b>${p.wind_label}</b></div>`:'';
   const penHtml=Object.entries(pen||{}).map(([t,dd])=>{
     const era=dd.era?dd.era.toFixed(2):'N/A';
     const pc=dd.tier==='WEAK'?'bad':dd.tier==='AVERAGE'?'warn':'good';
@@ -2840,7 +2912,33 @@ function showInfo(p,pen){
     <div class="pill">Park: <b>${p.park||'?'}</b></div>
     <div class="pill">Type: <b>${p.category||'?'}</b></div>
     <div class="pill ${wc}">Weather: <b>${temp} - ${p.weather_flag||'?'}</b></div>
-    <div class="pill">Wind: <b>${wind}</b></div>${penHtml}`;
+    <div class="pill">Wind: <b>${wind}${windDir}</b></div>${windImpact}${penHtml}`;
+  document.getElementById('infoCard').style.display='';
+}
+
+function showSlateInfo(games){
+  // Multi-game: show a card per game
+  const html=games.map(p=>{
+    const wc=(p.weather_flag||'').includes('SUPPRESSOR')||(p.weather_flag||'')==='DOME'?'warn':(p.weather_flag||'').includes('BOOST')?'good':'';
+    const temp=p.temp_f?p.temp_f+'F':'N/A';
+    const wind=p.wind_mph?(p.wind_mph+' mph'+(p.wind_dir?' '+p.wind_dir:'')):'N/A';
+    const penHtml=Object.entries(p.bullpen||{}).map(([t,dd])=>{
+      const era=dd.era?dd.era.toFixed(2):'N/A';
+      const pc=dd.tier==='WEAK'?'bad':dd.tier==='AVERAGE'?'warn':'good';
+      return`<span class="pill ${pc}" style="font-size:9px">${t}:<b>${era}</b></span>`;
+    }).join('');
+    const windImpact=p.wind_label?`<span class="pill" style="font-size:9px">💨<b>${p.wind_label}</b></span>`:'';
+    return`<div style="background:#080d18;border:1px solid #1e3a5f;border-radius:6px;padding:8px;margin-bottom:6px">
+      <div style="font-size:11px;font-weight:700;color:#f7c948;margin-bottom:4px">${p.game||'?'}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <span class="pill" style="font-size:9px">🏟 <b>${p.park||'?'}</b> [${p.category||'?'}]</span>
+        <span class="pill ${wc}" style="font-size:9px">🌡 <b>${temp} ${p.weather_flag||''}</b></span>
+        <span class="pill" style="font-size:9px">💨 <b>${wind}</b></span>
+        ${windImpact}${penHtml}
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('pillRow').innerHTML=html;
   document.getElementById('infoCard').style.display='';
 }
 
@@ -2865,6 +2963,7 @@ function showStats(stats){
           <td><b>${p.name||'?'}</b></td>
           <td>${p.role||'?'}</td>
           <td>${p.team||'?'}</td>
+          <td style="font-size:9px;color:#64748b">${p.game||''}</td>
           <td>${fv(p.barrel_pct,15)}</td>
           <td>${fv(p.exit_velocity,91)}</td>
           <td>${fv(p.ev50,100)}</td>
@@ -2880,10 +2979,10 @@ function showStats(stats){
           <td>${p.fetch_status==='ok'?'OK':'!'}</td>
         </tr>`;
       }catch(e){
-        return`<tr><td colspan="16" style="color:#ef4444">${p.name||'?'} - render error</td></tr>`;
+        return`<tr><td colspan="17" style="color:#ef4444">${p.name||'?'} - render error</td></tr>`;
       }
     }).join('');
-    document.getElementById('statBody').innerHTML=rows||'<tr><td colspan="16">No data</td></tr>';
+    document.getElementById('statBody').innerHTML=rows||'<tr><td colspan="17">No data</td></tr>';
   } catch(e) {
     document.getElementById('statBody').innerHTML=`<tr><td colspan="12" style="color:#ef4444">Error: ${e.message}</td></tr>`;
   }
@@ -2932,15 +3031,16 @@ class Handler(BaseHTTPRequestHandler):
             with store_lock:
                 job = jobs[jid]
                 snap = {
-                    'status':       job['status'],
-                    'steps':        job['steps'],
-                    'park_confirm': job['park_confirm'],
-                    'bullpen':      job['bullpen'],
-                    'error':        job['error'],
-                    'has_statcast': len(job.get('statcast', [])) > 0,
-                    'has_result':   bool(job.get('result')),
-                    'is_slate':     job.get('is_slate', False),
-                    'has_parlays':  bool(job.get('parlay_result')),
+                    'status':         job['status'],
+                    'steps':          job['steps'],
+                    'park_confirm':   job['park_confirm'],
+                    'bullpen':        job['bullpen'],
+                    'all_games_info': job.get('all_games_info', []),
+                    'error':          job['error'],
+                    'has_statcast':   len(job.get('statcast', [])) > 0,
+                    'has_result':     bool(job.get('result')),
+                    'is_slate':       job.get('is_slate', False),
+                    'has_parlays':    bool(job.get('parlay_result')),
                 }
             self._json(snap)
 
