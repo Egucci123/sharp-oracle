@@ -191,6 +191,7 @@ SYSTEM_PROMPT = (
     "  HR SOFT CHECKS: Is HPI>=3.5 after adjustments? GAP direction? Carry clears park?\n"
     "  HIT HARD STOPS: wOBA<.270 = disqualify for hits. EV<80 = disqualify for hits.\n"
     "    EXCEPTION: COLD gap>=+.060 + xwOBA>=.310 overrides wOBA floor — wOBA .240+ is ok.\n"
+    "    COLD gap +.030-.059 does NOT override wOBA floor. Needs >=+.060 to activate. Check gap magnitude first.\n"
     "  CONFIDENCE: Use adjusted HPI ONLY — no subjective confidence scoring.\n"
     "    Adj HPI>=5.5 = TOP 2 pick. Adj HPI 4.0-5.4 = B-grade/sleeper. Adj HPI<4.0 = fade.\n"
     "  Fail a HARD STOP = drop it. Everything else = list it with honest grade.\n\n"
@@ -293,7 +294,8 @@ def new_job():
         jobs[jid] = {
             'status': 'pending', 'steps': [], 'result': None,
             'error': None, 'statcast': [], 'park_confirm': {},
-            'bullpen': {}, 'created': time.time()
+            'bullpen': {}, 'created': time.time(),
+            'is_slate': False, 'parlay_result': None,
         }
     return jid
 
@@ -1483,6 +1485,143 @@ Lineup to parse:
         'park_name': '?', 'game_date': game_date or '',
     }
 
+def parse_multi_lineup(raw, game_date=None):
+    """
+    Parse multiple games from MLB app format or any multi-game paste.
+    Returns list of parsed game dicts, one per game.
+    """
+    prompt = f"""You are parsing multiple MLB games from a single paste.
+The input may contain 1-10 games. Each game has:
+- Away team @ Home team
+- Stadium name
+- Home pitcher and away pitcher (with ERA and SO stats)
+- Two lineup columns (Away on left, Home on right)
+
+RULES:
+- Team before @ is AWAY. Team after @ is HOME.
+- Away pitcher faces HOME batters. Home pitcher faces AWAY batters.
+- Extract batter hand from the letter in parentheses: (R), (L), (S)
+- Lineup position = order they appear (1-9)
+- Include ALL batters, default hand to R if unknown
+- Return a JSON array, one object per game
+
+Return ONLY a JSON array, no other text:
+[
+  {{
+    "away_team": "team name",
+    "home_team": "team name", 
+    "park_name": "stadium name or ?",
+    "game_time": "6:10 PM or ?",
+    "away_pitcher": {{"name": "First Last", "hand": "R/L", "era": "2.57"}},
+    "home_pitcher": {{"name": "First Last", "hand": "R/L", "era": "4.09"}},
+    "away_batters": [{{"name": "First Last", "hand": "R/L/S", "lineup_pos": 1, "position": "SS"}}],
+    "home_batters": [{{"name": "First Last", "hand": "R/L/S", "lineup_pos": 1, "position": "3B"}}]
+  }}
+]
+
+Input to parse:
+{raw}"""
+
+    resp = call_claude([{{'role': 'user', 'content': prompt}}], max_tokens=4000)
+    try:
+        m = re.search(r'\[.*\]', resp, re.DOTALL)
+        if m:
+            games = json.loads(m.group())
+            if isinstance(games, list):
+                for g in games:
+                    if 'game_date' not in g:
+                        g['game_date'] = game_date or ''
+                return games
+    except Exception as e:
+        print(f"[PARSE_MULTI] Error: {{e}}")
+    return []
+
+
+PARLAY_SYSTEM = """You are Marcus Cole, sharp MLB prop bettor building cross-game parlays.
+You have picks from multiple games. Build the BEST parlays using outside-the-box thinking.
+
+PARLAY PHILOSOPHY — think like a sharp, not a computer:
+1. VALUE OVER GRADE: A HPI 5.0 batter at +600 in a parlay beats a HPI 6.0 at +200.
+   Parlays need value legs to be worth it. The best parlay isn't always the highest HPI.
+2. STACK CONDITIONS: Multiple games with wind OUT = stack those batters. 
+   Multiple HR-vulnerable pitchers (HR/9 1.5+) = stack their victims.
+3. AVOID SAME-GAME HR PARLAYS: HRs in the same game are correlated (weather/pitcher affects both).
+   Spread HR legs across different games for true independence.
+4. HIT PARLAYS love volume hitters: Leadoff spots with FAV platoon in multiple games = 
+   near-certain contact in 4+ PA. Hit parlays should prioritize consistency not power.
+5. COLD GAP VALUE: A batter with xwOBA .380 but wOBA .270 (COLD +.110) is DRAMATICALLY 
+   underpriced in the market. Add these to parlays at huge plus money.
+6. GROUNDER PITCHER STACKING: Two grounder pitchers (GB%>45) with OPEN/HALF gates = 
+   stack the contact hitters facing them for hit parlays.
+7. AVOID HOT GAP batters in parlays: They look good on results but are regression candidates.
+   COLD gap batters are the correct parlay ingredients.
+8. PARK STACKING for HRs: BOOSTER parks (GABP, Yankee, CBP) = stack HR picks from those games.
+9. BULLPEN EXPOSURE: Games with WEAK pens (ERA>5.0) = add late-inning hit parlays from those slates.
+
+OUTPUT FORMAT:
+For each parlay, show:
+- Legs with player name, team, game, pick type, odds
+- Why these legs belong together (the EDGE not just the stats)  
+- Estimated parlay odds
+- Confidence: HIGH/MEDIUM/LOW
+
+Start with HR parlays (2-5 legs), then HIT parlays (2-10 legs).
+Always explain the cross-game angle — weather correlation, pitcher stacking, value hunting.
+"""
+
+
+def generate_parlays(all_game_picks, game_summaries):
+    """
+    Generate sharp parlays from all picks across the slate.
+    all_game_picks: list of {game, picks: [{name, team, type, odds, adj_hpi, signals}]}
+    game_summaries: list of {game, park, park_cat, temp, wind_impact, pen_era}
+    """
+    # Build context for parlay Claude call
+    lines = ["=== SLATE PICKS FOR PARLAY ANALYSIS ===\n"]
+    lines.append("GAME ENVIRONMENTS:")
+    for gs in game_summaries:
+        lines.append(f"  {gs.get('game','?')}: {gs.get('park','?')} [{gs.get('park_cat','?')}] "
+                     f"| {gs.get('temp','?')}F | Wind: {gs.get('wind_label','?')} "
+                     f"| Pens: {gs.get('pen_summary','?')}")
+    lines.append("")
+    
+    lines.append("ALL PICKS BY GAME:")
+    hr_picks_flat = []
+    hit_picks_flat = []
+    
+    for gp in all_game_picks:
+        game = gp.get('game', '?')
+        picks = gp.get('picks', [])
+        if not picks:
+            continue
+        lines.append(f"\n{game}:")
+        for p in picks:
+            ptype = p.get('type', '?')
+            name = p.get('name', '?')
+            team = p.get('team', '?')
+            odds = p.get('odds', '?')
+            hpi = p.get('adj_hpi', '?')
+            grade = p.get('grade', '?')
+            sigs = p.get('signals', '')
+            lines.append(f"  {ptype} | {name} ({team}) | Grade:{grade} HPI:{hpi} | {odds} | {sigs}")
+            if 'HR' in ptype:
+                hr_picks_flat.append({**p, 'game': game})
+            else:
+                hit_picks_flat.append({**p, 'game': game})
+    
+    lines.append(f"\n\nTotal HR picks: {len(hr_picks_flat)}")
+    lines.append(f"Total HIT picks: {len(hit_picks_flat)}")
+    lines.append("\nBuild the best parlays. Think outside the box.")
+    
+    ctx = "\n".join(lines)
+    
+    result = call_claude(
+        [{{'role': 'user', 'content': ctx}}],
+        system=PARLAY_SYSTEM,
+        max_tokens=4000
+    )
+    return result
+
 # ─── SCORING ─────────────────────────────────────────────────────────────────
 def compute_pitcher_gate(p):
     ev   = p.get('exit_velocity')
@@ -2157,6 +2296,186 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
     return '\n'.join(lines)
 
 # ─── MAIN JOB ────────────────────────────────────────────────────────────────
+def run_slate(jid, sid, raw_lineup, game_date=None):
+    """
+    Multi-game analysis: parse N games, run each in parallel, then build parlays.
+    Falls back to run_job if only 1 game detected.
+    """
+    with store_lock:
+        jobs[jid]['status'] = 'running'
+        jobs[jid]['is_slate'] = True
+
+    try:
+        # STEP 1: Parse all games
+        step_set(jid, 0, 'active', 'Parsing slate...')
+        games = parse_multi_lineup(raw_lineup, game_date)
+        if not games:
+            # Fall back to single game
+            print("[SLATE] No multi-game detected, running single game")
+            run_job(jid, sid, raw_lineup, game_date)
+            return
+        if len(games) == 1:
+            print("[SLATE] Single game detected, running single game")
+            run_job(jid, sid, raw_lineup, game_date)
+            return
+
+        print(f"[SLATE] Parsed {len(games)} games")
+        step_set(jid, 0, 'done', f'{len(games)} games parsed')
+
+        # STEP 2: Environment fetch for all games in parallel
+        step_set(jid, 1, 'active', f'Fetching weather/parks for {len(games)} games...')
+        cache = load_stats_cache()
+
+        def _fetch_env(g):
+            park_name, park_cat = resolve_park(g.get('home_team', '?'))
+            weather = fetch_weather(park_name)
+            pen_era = {}
+            for team in [g.get('home_team'), g.get('away_team')]:
+                if team and team != '?':
+                    pen_era[team] = fetch_bullpen_era(team)
+            return {'game': g, 'park_name': park_name, 'park_cat': park_cat,
+                    'weather': weather, 'pen_era': pen_era}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+            env_results = list(ex.map(_fetch_env, games))
+        step_set(jid, 1, 'done', f'Environments ready')
+
+        # STEP 3: Statcast fetch for all players across all games
+        step_set(jid, 2, 'active', 'Fetching Statcast for all games...')
+
+        def _process_game(env):
+            g = env['game']
+            home = g.get('home_team', '?')
+            away = g.get('away_team', '?')
+            hp = g.get('home_pitcher', {})
+            ap = g.get('away_pitcher', {})
+            pitcher_list = []
+            if hp.get('name'):
+                pitcher_list.append({**hp, 'role': 'PITCHER', 'team': home, 'faces_team': away, 'lineup_pos': 0})
+            if ap.get('name'):
+                pitcher_list.append({**ap, 'role': 'PITCHER', 'team': away, 'faces_team': home, 'lineup_pos': 0})
+            batter_list = []
+            for b in g.get('home_batters', []):
+                batter_list.append({**b, 'role': 'BATTER', 'team': home})
+            for b in g.get('away_batters', []):
+                batter_list.append({**b, 'role': 'BATTER', 'team': away})
+            pitcher_stats = fetch_all_parallel(pitcher_list, workers=2, cache=cache)
+            batter_stats  = fetch_all_parallel(batter_list, workers=2, cache=cache)
+            all_statcast  = pitcher_stats + batter_stats
+            with _recent_form_lock:
+                recent_form = dict(_recent_form_cache)
+            ctx = build_context(g, all_statcast, env['weather'], env['park_name'],
+                                env['park_cat'], env['pen_era'], recent_form)
+            return {'env': env, 'all_statcast': all_statcast, 'ctx': ctx}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+            game_data = list(ex.map(_process_game, env_results))
+
+        # Merge all statcast for combined table
+        all_statcast_combined = []
+        for gd in game_data:
+            all_statcast_combined.extend(gd['all_statcast'])
+
+        slim_statcast = []
+        for p in all_statcast_combined:
+            slim_statcast.append({
+                'name': p.get('name'), 'role': p.get('role'), 'team': p.get('team'),
+                'barrel_pct': p.get('barrel_pct'), 'exit_velocity': p.get('exit_velocity'),
+                'ev50': p.get('ev50'), 'hard_hit_pct': p.get('hard_hit_pct'),
+                'xwoba': p.get('xwoba'), 'woba': p.get('woba'), 'gap': p.get('gap'),
+                'sweet_spot_pct': p.get('sweet_spot_pct'),
+                'fly_ball_pct': p.get('fly_ball_pct') or p.get('batter_fb_pct'),
+                'iso': p.get('iso'), 'hr_per_9': p.get('hr_per_9'), 'hpi': p.get('hpi'),
+                'fetch_status': p.get('fetch_status'),
+            })
+
+        with store_lock:
+            jobs[jid]['statcast'] = slim_statcast
+            jobs[jid]['statcast_total'] = len(slim_statcast)
+        ok = sum(1 for x in all_statcast_combined if x.get('fetch_status') == 'ok')
+        step_set(jid, 2, 'done', f'Stats: {ok}/{len(all_statcast_combined)} fetched across {len(games)} games')
+
+        # STEP 4: Run all game analyses in parallel
+        step_set(jid, 3, 'active', f'Analyzing {len(games)} games...')
+
+        def _analyze_game(gd):
+            result = call_claude(
+                [{'role': 'user', 'content': gd['ctx']}],
+                system=SYSTEM_PROMPT,
+                max_tokens=4000
+            )
+            game_label = f"{gd['env']['game'].get('away_team','?')} @ {gd['env']['game'].get('home_team','?')}"
+            return f"\n{'='*60}\n## {game_label}\n{'='*60}\n{result}"
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+            game_analyses = list(ex.map(_analyze_game, game_data))
+
+        combined_analysis = '\n'.join(game_analyses)
+        step_set(jid, 3, 'done', f'{len(games)} games analyzed')
+
+        # STEP 5: Generate parlays
+        step_set(jid, 4, 'active', 'Building parlays...')
+
+        # Build game summaries for parlay context
+        game_summaries = []
+        for gd in game_data:
+            env = gd['env']
+            g = env['game']
+            wi = env['weather'].get('wind_impact', {})
+            game_summaries.append({
+                'game': f"{g.get('away_team','?')} @ {g.get('home_team','?')}",
+                'park': env['park_name'],
+                'park_cat': env['park_cat'],
+                'temp': env['weather'].get('temp_f', '?'),
+                'wind_label': wi.get('label', 'unknown') if wi else 'unknown',
+                'pen_summary': ' | '.join(f"{t}={d.get('era','?')}" for t,d in env['pen_era'].items()),
+            })
+
+        # Extract structured picks from analyses using Claude
+        picks_prompt = f"""Extract all HR and HIT picks from these game analyses.
+Return ONLY a JSON array, no other text.
+Each pick: {{"name":"First Last","team":"team","game":"Away @ Home","type":"HR"/"HIT"/"SLEEPER_HR"/"SLEEPER_HIT","grade":"A-/B+/B/C+","adj_hpi":"4.5","odds":"+380","signals":"EV50=104, FB/LD=98, dist=409"}}
+
+Analyses:
+{combined_analysis[:8000]}"""
+
+        picks_raw = call_claude([{'role': 'user', 'content': picks_prompt}], max_tokens=2000)
+        all_picks = []
+        try:
+            m = re.search(r'\[.*\]', picks_raw, re.DOTALL)
+            if m:
+                all_picks = json.loads(m.group())
+        except Exception as e:
+            print(f"[SLATE] Pick extraction error: {e}")
+
+        # Group picks by game
+        from collections import defaultdict
+        picks_by_game = defaultdict(list)
+        for p in all_picks:
+            picks_by_game[p.get('game', 'Unknown')].append(p)
+
+        all_game_picks = [{'game': game, 'picks': picks}
+                         for game, picks in picks_by_game.items()]
+
+        parlay_analysis = generate_parlays(all_game_picks, game_summaries)
+        step_set(jid, 4, 'done', 'Parlays built')
+
+        # Combine everything
+        final_output = combined_analysis + '\n\n' + '='*60 + '\n## SLATE PARLAYS\n' + '='*60 + '\n' + parlay_analysis
+
+        with store_lock:
+            jobs[jid]['result'] = final_output
+            jobs[jid]['parlay_result'] = parlay_analysis
+            jobs[jid]['status'] = 'done'
+
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[RUN_SLATE ERROR] {e}\n{tb}")
+        with store_lock:
+            jobs[jid]['status'] = 'error'
+            jobs[jid]['error'] = str(e)
+
+
 def run_job(jid, sid, raw_lineup, game_date=None):
     with store_lock:
         jobs[jid]['status'] = 'running'
@@ -2350,6 +2669,7 @@ tr.pitcher-row td{background:#06090f}
   <button class="nav-btn active" onclick="show('analyze',this)">ANALYZE</button>
   <button class="nav-btn" onclick="show('stats',this)">STATCAST</button>
   <button class="nav-btn" onclick="show('picks',this)">PICKS</button>
+  <button class="nav-btn" onclick="show('parlays',this)">PARLAYS</button>
 </div>
 
 <div id="panel-analyze" class="panel active">
@@ -2388,6 +2708,10 @@ tr.pitcher-row td{background:#06090f}
 
 <div id="panel-picks" class="panel">
   <div class="result-box" id="result">Run a lineup to see picks...</div>
+</div>
+
+<div id="panel-parlays" class="panel">
+  <div class="result-box" id="parlay-result">Run a slate (multiple games) to see parlays...</div>
 </div>
 
 <script>
@@ -2465,7 +2789,14 @@ function poll(){
       .then(r=>r.json())
       .then(res=>{
         document.getElementById('result').textContent=res.result||'No result';
-        show('picks',document.querySelectorAll('.nav-btn')[2]);
+        if(res.parlay_result){
+          document.getElementById('parlay-result').textContent=res.parlay_result;
+        }
+        if(res.is_slate){
+          show('parlays',document.querySelectorAll('.nav-btn')[3]);
+        } else {
+          show('picks',document.querySelectorAll('.nav-btn')[2]);
+        }
       })
       .catch(()=>{
         document.getElementById('result').textContent='Error loading result';
@@ -2599,7 +2930,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with store_lock:
                 job = jobs[jid]
-                # Send lightweight poll  -  no statcast, no result text (those are fetched separately)
                 snap = {
                     'status':       job['status'],
                     'steps':        job['steps'],
@@ -2608,6 +2938,8 @@ class Handler(BaseHTTPRequestHandler):
                     'error':        job['error'],
                     'has_statcast': len(job.get('statcast', [])) > 0,
                     'has_result':   bool(job.get('result')),
+                    'is_slate':     job.get('is_slate', False),
+                    'has_parlays':  bool(job.get('parlay_result')),
                 }
             self._json(snap)
 
@@ -2627,7 +2959,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({'error': 'not found'}, 404)
                 return
             with store_lock:
-                self._json({'result': jobs[jid].get('result', '')})
+                self._json({
+                    'result': jobs[jid].get('result', ''),
+                    'parlay_result': jobs[jid].get('parlay_result', ''),
+                    'is_slate': jobs[jid].get('is_slate', False),
+                })
         elif path == '/api/debug':
             qs = parse_qs(urlparse(self.path).query)
             name = qs.get('name', ['Elly De La Cruz'])[0]
@@ -2782,7 +3118,8 @@ class Handler(BaseHTTPRequestHandler):
             game_date = data.get('game_date')
             jid = new_job()
             sid = str(uuid.uuid4())[:8]
-            t = threading.Thread(target=run_job, args=(jid, sid, raw, game_date), daemon=True)
+            # Always use run_slate — it auto-detects single vs multi game
+            t = threading.Thread(target=run_slate, args=(jid, sid, raw, game_date), daemon=True)
             t.start()
             self._json({'jid': jid, 'sid': sid})
         else:
