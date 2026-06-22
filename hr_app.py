@@ -141,7 +141,7 @@ SYSTEM_PROMPT = (
     "    Magnitude determines strength: -.010 = weak fade, -.050 = moderate fade, -.080+ = extreme fade.\n"
     "    HOT gap NEVER = 'minimal HR fade' — it always fades HR. Only magnitude varies.\n"
     "  HOT gap (-.000 to -.079): Fades HR only. Hits remain live.\n"
-    "  HOT-EXTREME gap (magnitude >=.080, meaning gap <= -.080): Fades HR hard. Also flag hits.\n"
+    "  HOT-EXTREME gap (magnitude >=.120, meaning gap <= -.120): Fades HR hard AND suppresses hits. Hard fade both.\n"
     "  HOT-EXTREME gap (magnitude >=.120, meaning gap <= -.120): FADE BOTH HR AND HITS.\n"
     "    A gap of -.159 has magnitude .159 which is >=.120 = FADE HITS TOO.\n"
     "    A gap of -.085 has magnitude .085 which is >=.080 but <.120 = fade HR, hits marginal.\n"
@@ -180,7 +180,11 @@ SYSTEM_PROMPT = (
 
     "DOUBLE SCRUTINY — every pick checked twice:\n"
     "  HR HARD STOPS — very few true disqualifications:\n"
-    "    HR dist<370 = DISQUALIFIED for ANY HR pick. Non-negotiable.\n"
+    "    HR dist<370 = DISQUALIFIED for ANY HR pick. Non-negotiable. Even with 3+ signals.\n"
+    "    HR dist 360-369 = auto-disqualify regardless of EV50, FB/LD, or pitcher HR/9.\n"
+    "    SMALL SAMPLE: Brl%>=25 OR ISO>=0.400 OR EV>=99 with SS%>=50 AND HH%>=50 = check attempts.\n"
+    "      If these elite numbers come from <20 BBE (tiny sample), DISQUALIFY — noise not signal.\n"
+    "      John Rave (Brl%=40, ISO=0.857, 5 BIP) = auto-disqualified. Always check sample size.\n"
     "    HR dist<380 = DISQUALIFIED for SLEEPER HR only. Core picks live above 370.\n"
     "    HOT-EXTREME gap (magnitude>=.120) = FADE BOTH HR AND HITS always.\n"
     "    HOT-EXTREME gap (magnitude .080-.119) + HR dist<park_threshold = disqualify HR.\n"
@@ -273,6 +277,7 @@ SYSTEM_PROMPT = (
     "Sleeper HR = 3+ independent signals + HR dist>=380 + HPI>=3.0.\n"
     "Pitcher HR/9>=1.5 = +0.5 to every qualified batter's adjusted HPI vs that pitcher.\n"
     "Wind OUT 8mph+: add carry boost to HR dist before checking thresholds.\n"
+    "Wind-adjusted dist still <370ft = STILL DISQUALIFIED. Wind can't save a 355ft hitter.\n"
     "SAME platoon = -0.3 HPI for power bats (Barrel%>=15), -0.5 for others.\n"
     "FORM14 2+ HRs in 14 games = +0.5 HPI boost (locked-in power stretch).\n"
     "HOT gap fades HR only. HOT-EXTREME (>=.120) fades HR AND hits.\n"
@@ -1551,20 +1556,28 @@ You have picks from multiple games. Build the BEST parlays using outside-the-box
 PARLAY PHILOSOPHY — think like a sharp, not a computer:
 1. VALUE OVER GRADE: A HPI 5.0 batter at +600 in a parlay beats a HPI 6.0 at +200.
    Parlays need value legs to be worth it. The best parlay isn't always the highest HPI.
-2. STACK CONDITIONS: Multiple games with wind OUT = stack those batters. 
-   Multiple HR-vulnerable pitchers (HR/9 1.5+) = stack their victims.
-3. AVOID SAME-GAME HR PARLAYS: HRs in the same game are correlated (weather/pitcher affects both).
-   Spread HR legs across different games for true independence.
-4. HIT PARLAYS love volume hitters: Leadoff spots with FAV platoon in multiple games = 
-   near-certain contact in 4+ PA. Hit parlays should prioritize consistency not power.
-5. COLD GAP VALUE: A batter with xwOBA .380 but wOBA .270 (COLD +.110) is DRAMATICALLY 
-   underpriced in the market. Add these to parlays at huge plus money.
-6. GROUNDER PITCHER STACKING: Two grounder pitchers (GB%>45) with OPEN/HALF gates = 
-   stack the contact hitters facing them for hit parlays.
-7. AVOID HOT GAP batters in parlays: They look good on results but are regression candidates.
-   COLD gap batters are the correct parlay ingredients.
-8. PARK STACKING for HRs: BOOSTER parks (GABP, Yankee, CBP) = stack HR picks from those games.
-9. BULLPEN EXPOSURE: Games with WEAK pens (ERA>5.0) = add late-inning hit parlays from those slates.
+2. STACK PITCHER VULNERABILITY: The #1 edge in HR parlays is stacking batters against
+   pitchers with HR/9>=1.5. Senga (2.27), Lauer (2.16), Singer (2.08) = their victims are
+   the best HR parlay legs. This is MORE important than batter HPI alone.
+3. HARD RULE — NO SAME-GAME HR PARLAYS: Two HR legs from the SAME game are correlated.
+   Same umpire, same park, same game flow. NEVER put 2 HR legs from one game in a parlay.
+   Exception ONLY if both legs are +700 or better AND pitcher/weather conditions differ.
+4. HARD RULE — MAX 2 LEGS PER GAME IN HIT PARLAYS: Spread across 3+ different games.
+   3 legs in one game = if the pitchers dominate, all 3 lose simultaneously.
+5. HIT PARLAYS love volume + COLD gap: Leadoff hitters in 4+ PA with COLD gap (xwOBA>wOBA)
+   are the best hit parlay anchors. Contact rate + plate appearances = repeatability.
+6. COLD GAP VALUE: xwOBA>wOBA by 0.030+ = market pricing the wrong number. Stack these.
+7. AVOID HOT GAP batters in parlays: regression candidates. Only exception: wOBA>=.380 genuine elite.
+8. BOOSTER PARK STACKING for HRs: GABP (1.35), Yankee (1.28), CBP (1.22) = plus carry bonus.
+   Stack HR picks from BOOSTER parks when available.
+9. DOME ANCHOR: Dome games (Tropicana, Rogers Centre, etc) = weather-neutral, use as safe anchors.
+10. SMALL SAMPLE FLAG: Any batter with <15 BBE (Brl%>25 OR EV>98 with tiny SS%) = disqualify.
+    Brl%=40, ISO=0.857, EV=101 with 5 BIP = noise, not signal. Skip these no matter the HPI.
+11. PITCHER VULNERABILITY STACK (the real edge):
+    Step 1: Find pitchers with HR/9>=1.5 across the slate
+    Step 2: Find their best HPI opponents (different games from each other)  
+    Step 3: Build HR parlay from those opponents — they're facing vulnerable arms
+    Step 4: Add a dome/booster park leg if available for environmental edge
 
 OUTPUT FORMAT:
 For each parlay, show:
@@ -2498,33 +2511,43 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
                 'pen_summary': ' | '.join(f"{t}={d.get('era','?')}" for t,d in env['pen_era'].items()),
             })
 
-        # Extract structured picks from analyses using Claude
-        picks_prompt = f"""Extract all HR and HIT picks from these game analyses.
-Return ONLY a JSON array, no other text.
-Each pick: {{"name":"First Last","team":"team","game":"Away @ Home","type":"HR"/"HIT"/"SLEEPER_HR"/"SLEEPER_HIT","grade":"A-/B+/B/C+","adj_hpi":"4.5","odds":"+380","signals":"EV50=104, FB/LD=98, dist=409"}}
+        # Build parlay context directly from game data (no extraction step)
+        # Pass per-game picks summary + environments directly to parlay Claude
+        parlay_ctx_lines = ["=== SLATE PICKS FOR PARLAY CONSTRUCTION ===\n"]
+        parlay_ctx_lines.append("GAME ENVIRONMENTS:")
+        for gs in game_summaries:
+            parlay_ctx_lines.append(
+                f"  {gs['game']}: {gs['park']} [{gs['park_cat']}] | "
+                f"{gs['temp']}F | Wind: {gs['wind_label']} | Pens: {gs['pen_summary']}")
 
-Analyses:
-{combined_analysis[:8000]}"""
+        parlay_ctx_lines.append("\n\nPER-GAME ANALYSES (extract picks from ## PICKS sections):")
+        # Include full per-game analyses so parlay Claude sees all picks
+        for i, ga in enumerate(game_analyses):
+            # Extract just the PICKS section to save tokens
+            picks_start = ga.find('## PICKS')
+            reads_start = ga.find('## GAME READS')
+            if picks_start >= 0 and reads_start >= 0:
+                picks_section = ga[picks_start:reads_start]
+            elif picks_start >= 0:
+                picks_section = ga[picks_start:picks_start+3000]
+            else:
+                picks_section = ga[:2000]
+            parlay_ctx_lines.append(picks_section[:3000])
 
-        picks_raw = call_claude([{'role': 'user', 'content': picks_prompt}], max_tokens=2000, model=MODEL_FAST)
-        all_picks = []
-        try:
-            m = re.search(r'\[.*\]', picks_raw, re.DOTALL)
-            if m:
-                all_picks = json.loads(m.group())
-        except Exception as e:
-            print(f"[SLATE] Pick extraction error: {e}")
+        parlay_ctx_lines.append(
+            "\n\nBUILD THE BEST PARLAYS using the picks above."
+            "\nREMINDER OF HARD RULES:"
+            "\n- NO same-game HR parlays (exception only at +700+ with different pitchers)"
+            "\n- MAX 2 legs per game in hit parlays"
+            "\n- PRIORITIZE pitcher vulnerability stacks: find HR/9>=1.5 pitchers, stack their victims across different games"
+            "\n- Use ALL picks from ALL games above — don't improvise new picks"
+        )
 
-        # Group picks by game
-        from collections import defaultdict
-        picks_by_game = defaultdict(list)
-        for p in all_picks:
-            picks_by_game[p.get('game', 'Unknown')].append(p)
-
-        all_game_picks = [{'game': game, 'picks': picks}
-                         for game, picks in picks_by_game.items()]
-
-        parlay_analysis = generate_parlays(all_game_picks, game_summaries)
+        parlay_analysis = call_claude(
+            [{'role': 'user', 'content': '\n'.join(parlay_ctx_lines)}],
+            system=PARLAY_SYSTEM,
+            max_tokens=4000
+        )
         step_set(jid, 4, 'done', 'Parlays built')
 
         # Combine everything
