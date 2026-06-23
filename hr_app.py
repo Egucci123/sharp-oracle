@@ -1475,9 +1475,121 @@ def fetch_bullpen_era(team_name):
             pass
 
 # ─── LINEUP PARSING ──────────────────────────────────────────────────────────
+def _pre_extract_lineup(raw):
+    """
+    Pre-extract lineup structure in Python before sending to Claude.
+    Handles the MLB app's interleaved two-column format.
+    Returns a structured dict or None if extraction fails.
+    """
+    import re as _re
+    
+    # Check format BEFORE stripping markdown (determines interleaved vs sequential)
+    had_markdown_links = bool(_re.search(r'\[[^\]]+\]\([^)]+\)', raw))
+    
+    # Strip markdown links for processing
+    raw_clean = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', raw)
+    lines = [l.strip() for l in raw_clean.strip().split('\n') if l.strip()]
+    
+    # Find @ sign to get teams
+    at_idx = next((i for i, l in enumerate(lines) if l == '@'), -1)
+    if at_idx < 1:
+        return None
+    away_team = lines[at_idx - 1]
+    home_team = lines[at_idx + 1] if at_idx + 1 < len(lines) else '?'
+    
+    # Find park name (appears after team records like "(31-44)")
+    park_name = '?'
+    skip_words = {away_team.lower(), home_team.lower(), 'rhs', 'lhp', 'rhp', 'lineup'}
+    for i in range(at_idx + 1, min(at_idx + 12, len(lines))):
+        l = lines[i]
+        if (l and not l.startswith('(') and 'PM' not in l and 'AM' not in l 
+                and '•' not in l and '@' not in l and 'ERA' not in l
+                and l not in ('RHP', 'LHP') and 'Lineup' not in l
+                and l.lower() not in skip_words
+                and len(l) > 4):
+            # Park names typically have "Park", "Field", "Stadium", "Center", "Way" etc
+            # OR are multi-word proper nouns
+            park_name = l
+            break
+    
+    # Find lineup header positions
+    lineup_hdrs = [(i, l) for i, l in enumerate(lines) if 'Lineup' in l and len(l) < 20]
+    
+    # Find pitchers (appear before lineup headers)
+    pitchers = []
+    pitcher_hands = []
+    for i, l in enumerate(lines):
+        if l in ('RHP', 'LHP'):
+            # Previous non-empty line should be pitcher name
+            for j in range(i-1, -1, -1):
+                if lines[j].strip():
+                    pitcher_name = lines[j].strip()
+                    if pitcher_name not in ('RHP', 'LHP') and '(' not in pitcher_name and 'Lineup' not in pitcher_name:
+                        pitchers.append(pitcher_name)
+                        pitcher_hands.append('R' if l == 'RHP' else 'L')
+                    break
+    
+    # Extract player lines (lines with hand indicator like "(R)" or "(L)" or "(S)")
+    player_pat = _re.compile(r'^(.+?)\s+\(([RLS])\)\s+\w+$')
+    all_players = []
+    
+    # Find where lineups start (after both lineup headers)
+    lineup_start = 0
+    if len(lineup_hdrs) >= 2:
+        lineup_start = lineup_hdrs[-1][0] + 1
+    elif len(lineup_hdrs) == 1:
+        lineup_start = lineup_hdrs[0][0] + 1
+    
+    for line in lines[lineup_start:]:
+        # Handle numbered format: "1. Name (R) POS" 
+        line_clean = _re.sub(r'^\d+\.\s*', '', line)
+        m = player_pat.match(line_clean)
+        if m:
+            name = m.group(1).strip()
+            hand = m.group(2)
+            all_players.append({'name': name, 'hand': hand})
+    
+    if len(all_players) < 4:
+        return None  # Not enough players found
+    
+    # Split into away and home batters
+    # MLB app format: interleaved (away1, home1, away2, home2...) OR sequential
+    if len(all_players) >= 14:
+        # Format already detected above: had_markdown_links = interleaved, else sequential
+        mid = len(all_players) // 2
+        
+        if had_markdown_links:
+            # Interleaved format: away1, home1, away2, home2...
+            away_batters = [{'name': p['name'], 'hand': p['hand'], 'lineup_pos': i//2 + 1} 
+                           for i, p in enumerate(all_players) if i % 2 == 0][:9]
+            home_batters = [{'name': p['name'], 'hand': p['hand'], 'lineup_pos': i//2 + 1} 
+                           for i, p in enumerate(all_players) if i % 2 == 1][:9]
+        else:
+            # Sequential format: first 9 = away, next 9 = home
+            away_batters = [{'name': p['name'], 'hand': p['hand'], 'lineup_pos': i+1} 
+                           for i, p in enumerate(all_players[:mid])]
+            home_batters = [{'name': p['name'], 'hand': p['hand'], 'lineup_pos': i+1} 
+                           for i, p in enumerate(all_players[mid:])]
+    
+    # Assign pitchers: first pitcher = away pitcher (faces home batters)
+    away_pitcher = {'name': pitchers[0] if pitchers else '?', 'hand': pitcher_hands[0] if pitcher_hands else 'R'}
+    home_pitcher = {'name': pitchers[1] if len(pitchers) > 1 else '?', 'hand': pitcher_hands[1] if len(pitcher_hands) > 1 else 'R'}
+    
+    return {
+        'away_team': away_team,
+        'home_team': home_team,
+        'park_name': park_name,
+        'away_pitcher': away_pitcher,
+        'home_pitcher': home_pitcher,
+        'away_batters': away_batters,
+        'home_batters': home_batters,
+        'game_date': '',
+    }
+
+
 def parse_lineup(raw, game_date=None):
     """
-    Parse raw lineup paste using Claude.
+    Parse raw lineup paste using Python pre-extraction + Claude fallback.
     Handles any format: MLB.com, Rotowire, FantasyPros, plain text, etc.
     Extracts: away_team, home_team, away_pitcher, home_pitcher,
               away_batters, home_batters (with hand, lineup_pos).
@@ -1485,6 +1597,16 @@ def parse_lineup(raw, game_date=None):
     # Strip markdown links before parsing: [Text](url) -> Text
     import re as _re_md
     raw = _re_md.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', raw)
+    
+    # Try Python pre-extraction first (more reliable than Claude for MLB app format)
+    pre = _pre_extract_lineup(raw)
+    if pre and pre.get('away_team', '?') != '?' and len(pre.get('away_batters', [])) >= 7:
+        pre['game_date'] = game_date or ''
+        # Log what we extracted
+        print(f"[PARSE-PY] {pre['away_team']} @ {pre['home_team']} | "
+              f"Away P: {pre['away_pitcher']['name']} | Home P: {pre['home_pitcher']['name']} | "
+              f"Away batters: {len(pre['away_batters'])} | Home batters: {len(pre['home_batters'])}")
+        return pre
 
     prompt = f"""You are parsing an MLB lineup from the MLB app or similar source.
 Extract the information and return JSON only, no other text.
@@ -1494,18 +1616,33 @@ CRITICAL FORMAT NOTES:
   Team BEFORE the @ = AWAY team. Team AFTER the @ = HOME team.
 - Game status may show "warmup •", "Live", a time like "9:38 PM", or nothing — ignore it
 - Park/stadium name appears after the team records like "(31-44)"
-- Pitchers listed with hand (LHP/RHP) and stats (ERA, SO)
-- Away pitcher is listed FIRST. Home pitcher is listed SECOND.
+- Pitchers: listed with hand (LHP/RHP) and ERA stats. Away pitcher listed FIRST, home pitcher SECOND.
 - Away pitcher FACES HOME batters. Home pitcher FACES AWAY batters.
-- Lineups appear as numbered lists: "1. PlayerName (R) POS"
-- Away lineup appears FIRST (left column), Home lineup appears SECOND (right column)
+
+LINEUP SECTION HEADERS (CRITICAL):
+- You will see headers like "SEA Lineup" or "NYY Lineup" before each team's batters
+- The team abbreviation in the header tells you which team those batters belong to
+- "SEA Lineup" = Seattle Mariners batters → these go in away_batters (SEA is the @ team)
+- "PIT Lineup" = Pittsburgh Pirates batters → these go in home_batters
+- First lineup block = AWAY team batters. Second lineup block = HOME team batters.
+- Players are numbered 1-9 in each block. The first 1-9 block = away team. Second 1-9 block = home team.
+
+EXAMPLE:
+  Mariners@Pirates (away=Mariners, home=Pirates)
+  George Kirby RHP ← Mariners pitcher (away)
+  Mitch Keller RHP ← Pirates pitcher (home)
+  SEA Lineup ← Mariners batters start here (away_batters)
+  1. Crawford ... 9. Emerson
+  PIT Lineup ← Pirates batters start here (home_batters)  
+  1. Horwitz ... 9. Triolo
+
 - Batter hand: R=right, L=left, S=switch. Extract from (R)/(L)/(S) after name.
 - If hand not listed, use "R" as default.
 
 Return this exact JSON:
 {{
-  "away_team": "team nickname e.g. Red Sox",
-  "home_team": "team nickname e.g. Rockies",
+  "away_team": "team nickname e.g. Mariners",
+  "home_team": "team nickname e.g. Pirates",
   "away_pitcher": {{"name": "First Last", "hand": "R or L"}},
   "home_pitcher": {{"name": "First Last", "hand": "R or L"}},
   "away_batters": [{{"name": "First Last", "hand": "R/L/S", "lineup_pos": 1}}],
@@ -3476,3 +3613,4 @@ if __name__ == '__main__':
     t.start()
     server = HTTPServer(('0.0.0.0', PORT), Handler)
     server.serve_forever()
+    
