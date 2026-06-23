@@ -184,6 +184,10 @@ SYSTEM_PROMPT = (
     "    3+ signals do NOT override HR dist<370. Pitcher HR/9 does NOT override. NOTHING overrides.\n"
     "    Wind-adjusted dist<370 = STILL DISQUALIFIED. If wind-adj dist is 365ft = skip, full stop.\n"
     "    Gabriel Arias wind-adj 365ft = disqualified. No exceptions. Ever. List him for hits only.\n"
+    "    CONTEXT TAG [HR-DISQUALIFIED-<370] = that batter is DEAD for ALL HR picks.\n"
+    "      Not HR #1, not HR #2, not SLEEPER HR, not C-DART. Dead. List for hits only.\n"
+    "      If you see [HR-DISQUALIFIED-<370] in a batter's context line = skip for HR entirely.\n"
+    "      Raley 368ft [HR-DISQUALIFIED-<370] = no HR pick. Raleigh 373ft same = no HR pick.\n"
     "    SMALL SAMPLE: Brl%>=25 OR ISO>=0.400 OR EV>=99 with SS%>=50 AND HH%>=50 = check attempts.\n"
     "      If these elite numbers come from <20 BBE (tiny sample), DISQUALIFY — noise not signal.\n"
     "      John Rave (Brl%=40, ISO=0.857, 5 BIP) = auto-disqualified. Always check sample size.\n"
@@ -1482,28 +1486,31 @@ def parse_lineup(raw, game_date=None):
     import re as _re_md
     raw = _re_md.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', raw)
 
-    prompt = f"""You are parsing an MLB lineup. It could be pasted from ANY source  - 
-MLB.com, Rotowire, FantasyPros, ESPN, a plain text list, or anything else.
+    prompt = f"""You are parsing an MLB lineup from the MLB app or similar source.
 Extract the information and return JSON only, no other text.
 
-RULES:
-- The game format is AwayTeam @ HomeTeam (team before @ is AWAY, team after @ is HOME)
-- If no @ symbol, infer from context (stadium name, "home"/"away" labels, etc.)
-- Away pitcher faces HOME batters. Home pitcher faces AWAY batters.
-- Batter hand: R=right, L=left, S=switch. If not listed, guess from player name knowledge.
-- Lineup position: batting order 1-9. If not listed, use the order they appear.
-- Include ALL batters listed, even if hand is unknown (use "R" as default).
-- If a field is truly unknown, use "?" not null.
+CRITICAL FORMAT NOTES:
+- Teams appear as "AwayTeam@HomeTeam" (no spaces) OR "Away Team @ Home Team" (with spaces)
+  Team BEFORE the @ = AWAY team. Team AFTER the @ = HOME team.
+- Game status may show "warmup •", "Live", a time like "9:38 PM", or nothing — ignore it
+- Park/stadium name appears after the team records like "(31-44)"
+- Pitchers listed with hand (LHP/RHP) and stats (ERA, SO)
+- Away pitcher is listed FIRST. Home pitcher is listed SECOND.
+- Away pitcher FACES HOME batters. Home pitcher FACES AWAY batters.
+- Lineups appear as numbered lists: "1. PlayerName (R) POS"
+- Away lineup appears FIRST (left column), Home lineup appears SECOND (right column)
+- Batter hand: R=right, L=left, S=switch. Extract from (R)/(L)/(S) after name.
+- If hand not listed, use "R" as default.
 
-Return this exact JSON structure:
+Return this exact JSON:
 {{
-  "away_team": "team name",
-  "home_team": "team name",
-  "away_pitcher": {{"name": "First Last", "hand": "R/L"}},
-  "home_pitcher": {{"name": "First Last", "hand": "R/L"}},
+  "away_team": "team nickname e.g. Red Sox",
+  "home_team": "team nickname e.g. Rockies",
+  "away_pitcher": {{"name": "First Last", "hand": "R or L"}},
+  "home_pitcher": {{"name": "First Last", "hand": "R or L"}},
   "away_batters": [{{"name": "First Last", "hand": "R/L/S", "lineup_pos": 1}}],
   "home_batters": [{{"name": "First Last", "hand": "R/L/S", "lineup_pos": 1}}],
-  "park_name": "stadium name or ?",
+  "park_name": "stadium name",
   "game_date": "{game_date or ''}"
 }}
 
@@ -2308,7 +2315,13 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
             wind_adj_str = ''
             if hr_dist and hr_dist > 0 and wind_carry != 0:
                 adj_dist = round(hr_dist + wind_carry, 1)
-                wind_adj_str = f' WIND-ADJ-DIST={adj_dist}ft({hr_dist}+{wind_carry:+.0f})'
+                if adj_dist < 370:
+                    wind_adj_str = f' WIND-ADJ-DIST={adj_dist}ft({hr_dist}+{wind_carry:+.0f})[HR-DISQUALIFIED-<370]'
+                else:
+                    wind_adj_str = f' WIND-ADJ-DIST={adj_dist}ft({hr_dist}+{wind_carry:+.0f})'
+            elif hr_dist and hr_dist > 0 and wind_carry == 0:
+                if hr_dist < 370:
+                    wind_adj_str = f' HR-DIST={hr_dist}ft[HR-DISQUALIFIED-<370]'
 
             # Pitcher HR/9 bonus for this batter's team
             hr9_bonus = pitcher_hr9_bonus.get(b.get('team', ''), 0)
@@ -2484,6 +2497,11 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
         raw_blocks = [b.strip() for b in raw_blocks if b.strip()]
         print(f"[SLATE] Detected {len(raw_blocks)} game block(s)")
 
+        # Log first line of each block so we can verify games
+        for i, b in enumerate(raw_blocks):
+            first = next((l.strip() for l in b.split('\n') if l.strip()), '?')
+            print(f"[SLATE] Block {i+1}: {first[:80]}")
+
         if len(raw_blocks) <= 1:
             # Single game or unrecognized format — use single game flow
             print("[SLATE] Single game or unrecognized format, routing to run_job")
@@ -2506,6 +2524,13 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
 
         games = [g for g in parsed_list if g and g.get('home_team', '?') != '?']
         print(f"[SLATE] Successfully parsed {len(games)}/{len(raw_blocks)} games")
+        for g in games:
+            print(f"[SLATE] Parsed: {g.get('away_team','?')} @ {g.get('home_team','?')} | "
+                  f"Park: {g.get('park_name','?')} | "
+                  f"Away P: {g.get('away_pitcher',{}).get('name','?')} | "
+                  f"Home P: {g.get('home_pitcher',{}).get('name','?')} | "
+                  f"Away batters: {len(g.get('away_batters',[]))} | "
+                  f"Home batters: {len(g.get('home_batters',[]))}")
         if not games:
             print("[SLATE] All parses failed, falling back to single game")
             run_job(jid, sid, raw_lineup, game_date)
