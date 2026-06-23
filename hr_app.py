@@ -1478,6 +1478,10 @@ def parse_lineup(raw, game_date=None):
     Extracts: away_team, home_team, away_pitcher, home_pitcher,
               away_batters, home_batters (with hand, lineup_pos).
     """
+    # Strip markdown links before parsing: [Text](url) -> Text
+    import re as _re_md
+    raw = _re_md.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', raw)
+
     prompt = f"""You are parsing an MLB lineup. It could be pasted from ANY source  - 
 MLB.com, Rotowire, FantasyPros, ESPN, a plain text list, or anything else.
 Extract the information and return JSON only, no other text.
@@ -1527,6 +1531,10 @@ def parse_multi_lineup(raw, game_date=None):
     Parse multiple games from MLB app format or any multi-game paste.
     Returns list of parsed game dicts, one per game.
     """
+    # Strip markdown links before parsing
+    import re as _re_md2
+    raw = _re_md2.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', raw)
+
     prompt = f"""You are parsing multiple MLB games from the MLB app format.
 
 FORMAT: Each game block looks like:
@@ -2465,7 +2473,10 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
         # Split multi-game input by the MLB app separator "Gameday\n\nTickets"
         # Then parse each game individually using the reliable single-game parser
         import re as _re
-        raw_blocks = _re.split(r'Gameday\s*\n+\s*Tickets\s*\n*', raw_lineup)
+        # Strip markdown links: [Text](url) -> Text (MLB app hyperlink format)
+        raw_lineup = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', raw_lineup)
+        # Split on Gameday separator (plain text after stripping)
+        raw_blocks = _re.split(r'\nGameday\s*\n(?:Tickets[^\n]*\n)?', raw_lineup)
         raw_blocks = [b.strip() for b in raw_blocks if b.strip()]
         print(f"[SLATE] Detected {len(raw_blocks)} game block(s)")
 
@@ -2479,6 +2490,8 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
         # Run in parallel with Haiku for speed
         def _parse_one(block):
             try:
+                # Strip any remaining markdown links
+                block = _re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', block)
                 return parse_lineup(block, game_date)
             except Exception as e:
                 print(f"[SLATE] Parse error on block: {e}")
