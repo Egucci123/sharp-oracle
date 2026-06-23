@@ -2286,18 +2286,7 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
             if brl >= 20 and park_cat == 'BOOSTER' and platoon in ('FAV','FAV(SW)'):
                 u12 = ' [#12:ELITE-BARREL+BOOSTER->B-DART]'
 
-            # Upgrade #5: Late Bullpen — spots 5-9 vs weak pen = flag for hits
-            u5 = ''
-            pen_data = pen_era.get(opp, {})
-            opp_pen_era = pen_data.get('era') if pen_data else None
-            if opp_pen_era and opp_pen_era >= 5.00 and pos >= 5:
-                brl = b.get('barrel_pct') or 0
-                xw = b.get('xwoba') or 0
-                if brl >= 15 and xw >= 0.350:
-                    u5 = f' [#5:LATE-BULLPEN-ERA{opp_pen_era:.2f}->HIT-LIVE]'
-
             # Upgrade #13: No 2026 data = max B-grade cap already handled by PROXY tag
-            # Add explicit flag if proxy
             u13 = ''
             if b.get('fetch_status','') and 'no stat' in str(b.get('fetch_status','')):
                 u13 = ' [#13:NO-2026-DATA->MAX-B]'
@@ -2339,6 +2328,16 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
             pos = b.get('lineup_pos', 5)
             pa_est = 4.5 if pos <= 2 else (4.0 if pos <= 5 else 3.3)
             pa_str = f'~{pa_est}PA'
+
+            # Upgrade #5: Late Bullpen — spots 5-9 vs weak pen = flag for hits (pos now defined)
+            u5 = ''
+            pen_data = pen_era.get(opp, {})
+            opp_pen_era = pen_data.get('era') if pen_data else None
+            if opp_pen_era and opp_pen_era >= 5.00 and pos >= 5:
+                brl_u5 = b.get('barrel_pct') or 0
+                xw_u5 = b.get('xwoba') or 0
+                if brl_u5 >= 15 and xw_u5 >= 0.350:
+                    u5 = f' [#5:LATE-BULLPEN-ERA{opp_pen_era:.2f}->HIT-LIVE]'
 
             lines.append(
                 f"  #{pos} {proxy}{b.get('name','?')} ({b.get('hand','?')}HB) | "
