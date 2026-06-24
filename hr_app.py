@@ -123,6 +123,19 @@ SYSTEM_PROMPT = (
     "  FB/LD MISMATCH vs pitcher: Batter FB/LD 97 vs pitcher FB/LD allowed 90 = direct carry edge.\n"
     "  Barrel/PA>=10 on high-K batter = true elite power rate the market undervalues.\n\n"
 
+    "PITCHER ASSIGNMENT — CRITICAL, CHECK EVERY PICK:\n"
+    "  The context shows: '[Pitcher Name] pitches for [TEAM], FACES [OPP] batters'\n"
+    "  A batter ALWAYS faces the OPPONENT's pitcher, NEVER their own team's pitcher.\n"
+    "  Check: '=== TEAM BATTERS vs [OPP_PITCHER] (opp_team, gate=X) ==='\n"
+    "  Examples:\n"
+    "    Astros @ Blue Jays: Yesavage pitches FOR Astros, faces Blue Jays batters.\n"
+    "      → Alvarez (Astro) faces BURROWS (Blue Jays pitcher), NOT Yesavage.\n"
+    "    D-backs @ Cardinals: Liberatore pitches FOR D-backs, faces Cardinals batters.\n"
+    "      → Marte (D-back) faces BRATT/Cardinals pitcher, NOT Liberatore.\n"
+    "      → Velázquez (Cardinal) faces LIBERATORE, NOT Bratt.\n"
+    "  If citing a pitcher's HR/9 or gate in a pick, verify it's the OPPONENT pitcher.\n"
+    "  NEVER cite your own team's pitcher characteristics for a batter's matchup.\n\n"
+
     "PITCHER READS:\n"
     "  GATE LOGIC: Score 1pt per SUPPRESSION signal. OPEN=hittable=bet batters. CLOSED=suppressor=fade HR.\n"
     "  A CLOSED gate means the pitcher is ELITE and hard to hit — not that he's being crushed.\n"
@@ -247,7 +260,12 @@ SYSTEM_PROMPT = (
 
 
 
-    "DART PICKS — C-DART and B-DART flags in context mean:\n"
+    "ODDS DISPLAY: If odds aren't available from data, estimate using these defaults:\n"
+    "  HR #1 core pick: +350 to +500 range based on batter grade\n"
+    "  HR #2: +400 to +600\n"
+    "  SLEEPER HRs: +500 to +800 range\n"
+    "  Hit props: -150 to +200 range based on lineup spot and wOBA\n"
+    "  NEVER write '[odds TBD]' — always provide a realistic estimate.\n\n"
     "  C-DART: Long-shot HR pick (+400 or better) the data supports despite low grade.\n"
     "  B-DART: Mid-range HR pick (+300 or better) with real power signal hidden by metrics.\n"
     "  When you see [#11:4/4-FAV-1-5->C-DART] = include as SLEEPER HR if HPI>=3.0 after adj.\n"
@@ -1734,6 +1752,13 @@ Input to parse:
 
 
 PARLAY_SYSTEM = """You are Marcus Cole. You've been capping sports for 15 years. You don't build spreadsheets — you find edges and bet them. Today you have picks across multiple MLB games and you need to find the BEST combinations to win money.
+
+PITCHER ASSIGNMENT CHECK — VERIFY BEFORE WRITING:
+Each pick in the game analyses shows which pitcher a batter faces. The batter ALWAYS faces the OPPONENT's pitcher.
+- If Astros @ Blue Jays: Alvarez (Astro) faces the Blue Jays pitcher, NOT the Astros pitcher.
+- The pick summary will say "faces [Pitcher X]" — use THAT pitcher name in your reasoning.
+- NEVER describe a batter as "facing" their own team's pitcher.
+- If a pick says "Alvarez faces Burrows (OPEN gate)" — describe Burrows, not Yesavage.
 
 HOW YOU THINK:
 You start by scanning everything for the single best bet on the board. Then you look for 2-3 picks that genuinely CONNECT — shared pitcher vulnerability, stacked wind conditions, regression bombs in the same environment, or a narrative the market hasn't figured out yet. You never pad a parlay just to hit a leg count. Every leg has to earn its spot.
@@ -3613,4 +3638,3 @@ if __name__ == '__main__':
     t.start()
     server = HTTPServer(('0.0.0.0', PORT), Handler)
     server.serve_forever()
-    
