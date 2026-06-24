@@ -2521,6 +2521,7 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
 
             lines.append(
                 f"  #{pos} {proxy}{b.get('name','?')} ({b.get('hand','?')}HB) | "
+                f"TEAM={b.get('team','?')} | FACES={opp_pitcher}({opp}) | "
                 f"SCORE={score}/4 GRADE={grade} | plat={platoon} | {pa_str} | "
                 f"gap={gs}({gap_flag}){hr_cap}{u5}{u11}{u12}{u13}"
                 f"{wind_adj_str}{hr9_bonus_str}{form_str} | wOBA={b.get('woba','N/A')} | {breakdown}"
