@@ -545,13 +545,13 @@ def _download_csvs():
         ('custom_pitchers.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=pitcher&filter=&min=1'
-         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,popups_percent'
+         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,popups_percent,pull_percent,home_run'
          f'&chart=false&csv=true'),
         # Custom batter stats  -  ground ball %, fly ball %, ISO (confirmed Savant field names)
         ('custom_batters.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=batter&filter=&min=1'
-         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,b_iso'
+         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,b_iso,pull_percent,straightaway_percent,opposite_percent,home_run'
          f'&chart=false&csv=true'),
     ]
     for filename, url in urls:
@@ -757,12 +757,12 @@ def load_stats_cache():
         ('pitcher', 'custom_pitchers.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=pitcher&filter=&min=1'
-         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,popups_percent'
+         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,popups_percent,pull_percent,home_run'
          f'&chart=false&csv=true'),
         ('batter', 'custom_batters.csv',
          f'https://baseballsavant.mlb.com/leaderboard/custom'
          f'?year={CURRENT_YEAR}&type=batter&filter=&min=1'
-         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,b_iso'
+         f'&selections=groundballs_percent,flyballs_percent,linedrives_percent,b_iso,pull_percent,straightaway_percent,opposite_percent,home_run'
          f'&chart=false&csv=true'),
     ]:
         try:
@@ -1009,6 +1009,12 @@ def fetch_one_player(info, cache=None):
             avg = g(row, 'b_batting_average', 'batting_average', 'ba')
             if slg and avg:
                 result['iso'] = round(slg - avg, 3)
+        # Pull rate and spray direction (from custom leaderboard)
+        result['pull_percent'] = g(row, 'pull_percent')
+        result['straightaway_percent'] = g(row, 'straightaway_percent')
+        result['opposite_percent'] = g(row, 'opposite_percent')
+        # HR count (for HR/FB% computation)
+        result['home_run_count'] = g(row, 'home_run')
 
         if result['xwoba'] is not None:
             result['data_source']  = 'leaderboard'
@@ -1169,6 +1175,16 @@ def compute_wind_impact(wind_degree, wind_mph, park_name):
     if diff > 180:
         diff = 360 - diff
 
+    # Compute whether wind is toward LF or RF side
+    # LF is typically CF bearing - 45 degrees, RF is CF bearing + 45 degrees
+    lf_bearing = (cf_bearing - 45) % 360
+    rf_bearing = (cf_bearing + 45) % 360
+    diff_lf = abs(wind_toward - lf_bearing)
+    if diff_lf > 180: diff_lf = 360 - diff_lf
+    diff_rf = abs(wind_toward - rf_bearing)
+    if diff_rf > 180: diff_rf = 360 - diff_rf
+    wind_to_lf = diff_lf < diff_rf  # wind direction is more toward LF than RF
+
     # diff < 45 = blowing out toward CF, diff > 135 = blowing in from CF
     if diff <= 45:
         impact = 'OUT'
@@ -1185,7 +1201,8 @@ def compute_wind_impact(wind_degree, wind_mph, park_name):
         carry_boost = 0
         label = f'{wind_mph}mph crosswind (minimal HR impact)'
 
-    return {'impact': impact, 'label': label, 'carry_boost': carry_boost}
+    return {'impact': impact, 'label': label, 'carry_boost': carry_boost,
+            'wind_to_lf': wind_to_lf, 'wind_to_rf': not wind_to_lf}
 
 def fetch_weather(park_name):
     if park_name in DOME_PARKS:
@@ -2454,10 +2471,8 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
     # Pre-compute wind carry boost for HR distance adjustments
     wind_carry = 0
     wi = weather.get('wind_impact', {}) if weather else {}
-    if wi:
-        boost = wi.get('carry_boost', 0) or 0
-        if wi.get('impact') in ('OUT', 'IN'):
-            wind_carry = boost  # positive=OUT, negative=IN
+    wind_direction = wi.get('impact', '') if wi else ''  # 'OUT', 'IN', 'CROSS', 'CALM'
+    wind_boost_raw = wi.get('carry_boost', 0) or 0 if wi else 0
 
     # Pitcher gates
     pitcher_gates = {}
@@ -2595,15 +2610,59 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
                 except:
                     pass
 
-            # Wind-adjusted HR distance
+
+            # Pull-direction-aware wind carry
+            # Wind OUT to LF benefits RHB pullers (pull=LF). LHB pullers go to RF — no LF benefit.
+            # Wind OUT to RF benefits LHB pullers (pull=RF). RHB pullers go to LF — no RF benefit.
+            # Generic OUT (to CF/general) benefits both equally.
             hr_dist = b.get('avg_hr_dist') or 0
+            batter_hand = b.get('hand', '?')  # 'L', 'R', 'S'
+            pull_pct = b.get('pull_percent') or 0
+            wind_carry = 0
+            pull_boost_note = ''
+
+            if wind_boost_raw != 0 and wind_direction in ('OUT', 'IN'):
+                wind_to_lf = wi.get('wind_to_lf', False) if wi else False
+                wind_to_rf = wi.get('wind_to_rf', False) if wi else False
+
+                if wind_direction == 'OUT':
+                    if wind_to_lf:
+                        # Wind blowing OUT to LF: benefits RHB pull hitters most
+                        if batter_hand in ('R', 'S') and pull_pct >= 40:
+                            wind_carry = wind_boost_raw
+                            pull_boost_note = f'PULL-BOOST(RHB-pull={pull_pct}%->LF-wind)'
+                        elif batter_hand == 'L':
+                            # LHB pulls to RF — opposite of LF wind, reduced benefit
+                            wind_carry = round(wind_boost_raw * 0.3, 1)
+                            pull_boost_note = f'PULL-REDUCED(LHB-pulls-RF,wind-to-LF)'
+                        else:
+                            wind_carry = round(wind_boost_raw * 0.6, 1)
+                    elif wind_to_rf:
+                        # Wind blowing OUT to RF: benefits LHB pull hitters most
+                        if batter_hand in ('L', 'S') and pull_pct >= 40:
+                            wind_carry = wind_boost_raw
+                            pull_boost_note = f'PULL-BOOST(LHB-pull={pull_pct}%->RF-wind)'
+                        elif batter_hand == 'R':
+                            wind_carry = round(wind_boost_raw * 0.3, 1)
+                            pull_boost_note = f'PULL-REDUCED(RHB-pulls-LF,wind-to-RF)'
+                        else:
+                            wind_carry = round(wind_boost_raw * 0.6, 1)
+                    else:
+                        # Generic OUT (CF) — benefits both equally
+                        wind_carry = wind_boost_raw
+                else:
+                    # Wind IN — suppresses regardless of pull direction
+                    wind_carry = wind_boost_raw  # negative value
+
+            # Wind-adjusted HR distance
             wind_adj_str = ''
             if hr_dist and hr_dist > 0 and wind_carry != 0:
                 adj_dist = round(hr_dist + wind_carry, 1)
+                pull_note = f'[{pull_boost_note}]' if pull_boost_note else ''
                 if adj_dist < 370:
-                    wind_adj_str = f' WIND-ADJ-DIST={adj_dist}ft({hr_dist}+{wind_carry:+.0f})[HR-DISQUALIFIED-<370]'
+                    wind_adj_str = f' WIND-ADJ-DIST={adj_dist}ft({hr_dist}+{wind_carry:+.0f}){pull_note}[HR-DISQUALIFIED-<370]'
                 else:
-                    wind_adj_str = f' WIND-ADJ-DIST={adj_dist}ft({hr_dist}+{wind_carry:+.0f})'
+                    wind_adj_str = f' WIND-ADJ-DIST={adj_dist}ft({hr_dist}+{wind_carry:+.0f}){pull_note}'
             elif hr_dist and hr_dist > 0 and wind_carry == 0:
                 if hr_dist < 370:
                     wind_adj_str = f' HR-DIST={hr_dist}ft[HR-DISQUALIFIED-<370]'
@@ -2642,10 +2701,11 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
                 if brl_u5 >= 15 and xw_u5 >= 0.350:
                     u5 = f' [#5:LATE-BULLPEN-ERA{opp_pen_era:.2f}->HIT-LIVE]'
 
+            pull_str = f" PULL={b.get('pull_percent')}%" if b.get('pull_percent') else ''
             lines.append(
                 f"  #{pos} {proxy}{b.get('name','?')} ({b.get('hand','?')}HB) | "
                 f"TEAM={b.get('team','?')} | FACES={opp_pitcher}({opp}) | "
-                f"SCORE={score}/4 GRADE={grade} | plat={platoon} | {pa_str} | "
+                f"SCORE={score}/4 GRADE={grade} | plat={platoon} | {pa_str}{pull_str} | "
                 f"gap={gs}({gap_flag}){hr_cap}{u5}{u11}{u12}{u13}"
                 f"{wind_adj_str}{hr9_bonus_str}{form_str} | wOBA={b.get('woba','N/A')} | {breakdown}"
             )
@@ -3598,9 +3658,9 @@ class Handler(BaseHTTPRequestHandler):
                 ('custom_batter_csv',
                  f'https://baseballsavant.mlb.com/leaderboard/custom?year={CURRENT_YEAR}&type=batter&filter=&min=1&selections=pa,avg_hit_speed,ev95percent,barrel_batted_rate,groundballs_percent,hard_hit_percent,csw&chart=false&csv=true'),
                 ('custom_batter_fb',
-                 f'https://baseballsavant.mlb.com/leaderboard/custom?year={CURRENT_YEAR}&type=batter&filter=&min=1&selections=groundballs_percent,flyballs_percent,linedrives_percent,b_iso&chart=false&csv=true'),
+                 f'https://baseballsavant.mlb.com/leaderboard/custom?year={CURRENT_YEAR}&type=batter&filter=&min=1&selections=groundballs_percent,flyballs_percent,linedrives_percent,b_iso,pull_percent,straightaway_percent,opposite_percent,home_run&chart=false&csv=true'),
                 ('custom_pitcher_fb',
-                 f'https://baseballsavant.mlb.com/leaderboard/custom?year={CURRENT_YEAR}&type=pitcher&filter=&min=1&selections=groundballs_percent,flyballs_percent,linedrives_percent,popups_percent&chart=false&csv=true'),
+                 f'https://baseballsavant.mlb.com/leaderboard/custom?year={CURRENT_YEAR}&type=pitcher&filter=&min=1&selections=groundballs_percent,flyballs_percent,linedrives_percent,popups_percent,pull_percent,home_run&chart=false&csv=true'),
                 ('expected_stats_pitcher',
                  f'https://baseballsavant.mlb.com/leaderboard/expected_statistics?type=pitcher&year={CURRENT_YEAR}&position=&team=&min=1&csv=false'),
                 ('mlb_stats_api_pitching',
