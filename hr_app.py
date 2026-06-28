@@ -260,86 +260,182 @@ SYSTEM_PROMPT = (
 
 
 
-    "ODDS DISPLAY: If odds aren't available from data, estimate using these defaults:\n"
-    "  HR #1 core pick: +350 to +500 range based on batter grade\n"
-    "  HR #2: +400 to +600\n"
-    "  SLEEPER HRs: +500 to +800 range\n"
-    "  Hit props: -150 to +200 range based on lineup spot and wOBA\n"
-    "  NEVER write '[odds TBD]' — always provide a realistic estimate.\n\n"
-    "  C-DART: Long-shot HR pick (+400 or better) the data supports despite low grade.\n"
-    "  B-DART: Mid-range HR pick (+300 or better) with real power signal hidden by metrics.\n"
-    "  When you see [#11:4/4-FAV-1-5->C-DART] = include as SLEEPER HR if HPI>=3.0 after adj.\n"
-    "  When you see [#12:ELITE-BARREL+BOOSTER->B-DART] = include as SLEEPER HR pick.\n"
-    "  When you see [#5:LATE-BULLPEN-ERA5.xx->HIT-LIVE] = include as SLEEPER HIT regardless of grade.\n\n"
+    "SELECTIVITY — THE MOST IMPORTANT RULE:\n"
+    "You are NOT required to produce picks for every game. If both pitchers are elite\n"
+    "and no batter clears the threshold, that game produces ZERO picks. That is correct.\n"
+    "Forcing picks where no edge exists is the #1 way to lose money long-term.\n\n"
 
-    "PITCHER GAP NOTE: Pitcher gap direction is OPPOSITE to batters.\n"
-    "  Pitcher positive gap (xwOBA > wOBA) = pitcher is BETTER than results show = tighten gate.\n"
-    "  Pitcher negative gap (wOBA > xwOBA) = pitcher has been LUCKY = expect more hits coming.\n"
-    "  PITCHER-LUCKY flag in context = opens gate half step even if score says HALF/CLOSED.\n\n"
+    "CLOSED GATE HARD RULES:\n"
+    "- HR vs CLOSED 3/4 gate: ONLY if batter is 4/4 grade AND HPI>=6.0 after gate penalty.\n"
+    "- HIT at -135 or worse vs CLOSED gate: Only if wOBA>=.390 AND spot #1-2. Otherwise skip.\n\n"
 
-    "MAX HIT SPEED — ceiling power signal:\n"
-    "  MAX-SPEED>=115 = top-1% ceiling contact. Even if EV50 is average, he can go nuclear.\n"
-    "  Market prices averages. You price ceiling. A batter with MAX-SPEED=116 and EV50=100\n"
-    "  has more HR upside than a batter with EV50=103 and MAX-SPEED=108.\n"
-    "  Combine MAX-SPEED>=115 with OPEN gate + FAV platoon = automatic sleeper candidate.\n\n"
+    "HIT PROP EDGE FILTER:\n"
+    "- Negative juice (-120 or worse): wOBA>=.370 AND gate OPEN/HALF AND spot #1-3.\n"
+    "- At -135 or worse: wOBA>=.390 AND gate OPEN AND spot #1-2. No exceptions.\n"
+    "- Plus money hits: wOBA>=.330 with COLD gap OR spot #1-2 with OPEN gate.\n\n"
+
+    "SLEEPER RULES:\n"
+    "- Maximum 2 SLEEPER HRs per SLATE total. Pick the 2 best across all games.\n"
+    "- Maximum 2 SLEEPER HITs per SLATE total.\n"
+    "- Sleeper requires 3+ INDEPENDENT signals. COLD gap alone = not a sleeper.\n\n"
+
+    "NEW BET TYPES — USE THESE:\n\n"
+
+    "TOTAL BASES (TB) PROPS — use when XBH environment is favorable:\n"
+    "  1.5+ TB: better than 1+ hit when batter has elite EV in booster park/wind OUT\n"
+    "    because XBH (doubles, HRs) are likely. Both a double AND a HR count.\n"
+    "  2.5+ TB: use when batter is 3/4+ grade facing OPEN gate with wind OUT 10mph+\n"
+    "    and hits 1.5+ TB at 45%+ rate. Elite power in carry environment.\n"
+    "  Signal: Barrel%>=15 + booster park OR wind OUT 8mph+ + wOBA>=.360 = consider TB over hit prop.\n"
+    "  Odds typically: 1.5+TB around -120 to +110, 2.5+TB around +150 to +250.\n\n"
+
+    "FIRST 5 INNINGS (F5) — use when starter edge is clear but bullpen uncertain:\n"
+    "  F5 ML: when starter xwOBA gap is >0.060 (one clearly better) but both pens are unknown/volatile.\n"
+    "    Locks in the starter matchup edge without bullpen variance.\n"
+    "  F5 UNDER: when both starters are CLOSED gate (3+/4). Avoids bullpen chaos in final 4 innings.\n"
+    "    Classic case: Gausman CLOSED gate in dome = F5 Under is sharper than full-game Under.\n"
+    "  F5 OVER: when one starter has OPEN gate and Form14 ERA>6.00 (struggling). Get runs early.\n"
+    "  Label these explicitly: F5 ML [Team] | [odds] or F5 UNDER [line] | [odds]\n\n"
+
+    "CORRELATED SAME-GAME HIT PARLAYS — legal and +EV:\n"
+    "  Allowed: Team ML + 2 hitters from that team to get hits (correlation = if team wins, they likely hit)\n"
+    "  Allowed: Team OVER + leadoff hitter hit + cleanup hitter hit (correlated run environment)\n"
+    "  STILL BANNED: Same-game HR parlays. Two HRs from same game = independent, not correlated.\n"
+    "  Label these: SGP [Game] | [odds]\n\n"
+
+    "SERIES CONTEXT — CHECK THIS:\n"
+    "  Game 3 of 3-game series = GETAWAY DAY flag.\n"
+    "  Getaway day: managers pull starters early, rest top bullpen arms, sub out stars in late innings.\n"
+    "  Effect on picks: reduce PA estimates for spots 3-5 by 0.5 PA. Stars may not play full game.\n"
+    "  Effect on totals: UNDER lean on getaway day regardless of other factors (short starters, tired pen).\n"
+    "  When context says 'Game 3' or 'series finale' = flag it and adjust.\n\n"
+
+    "CLV AWARENESS:\n"
+    "  Closing Line Value = did the market agree with you?\n"
+    "  When odds are provided: note if the pick is WITH sharp money (line moved toward your side)\n"
+    "  or AGAINST sharp money (line moved away). Line movement unknown = note that explicitly.\n"
+    "  A pick the market agrees with = lower confidence (already priced in).\n"
+    "  A pick where line hasn't moved despite strong data = potential market miss = higher confidence.\n\n"
+
+    "PLAYER/TEAM/PITCHER IDENTITY — READ THIS CAREFULLY:\n"
+    "  Every batter's context line shows: TEAM=[team] | FACES=[pitcher]([opp_team])\n"
+    "  TEAM = the team the BATTER plays for.\n"
+    "  FACES = the pitcher the batter is hitting AGAINST (always from the OPPOSING team).\n"
+    "  NEVER describe a batter as facing his own team's pitcher.\n"
+    "  NEVER mix up which team a batter plays for.\n"
+    "  Before writing any pick: confirm BATTER TEAM ≠ PITCHER TEAM. If they match, you have it wrong.\n"
+    "  Example: TEAM=Astros | FACES=Melton(Tigers) → Alvarez is an Astro facing Tigers pitcher Melton. ✓\n"
+    "  Example: TEAM=Astros | FACES=Imai(Astros) → WRONG. Cannot face your own pitcher. Re-read context.\n\n"
+
+    "ODDS DISPLAY:\n"
+    "  HR core: +350 to +500. HR #2: +400 to +600. Sleeper HR: +500 to +800.\n"
+    "  Hit props: -150 to +200. TB 1.5+: -120 to +110. TB 2.5+: +150 to +250.\n"
+    "  F5 ML: similar to full-game ML but tighter. F5 Under: -110 to -130.\n"
+    "  NEVER write '[odds TBD]' — always estimate.\n\n"
+
+    "  C-DART: Long-shot HR (+400 or better) data supports despite low grade.\n"
+    "  B-DART: Mid-range HR (+300 or better) with real power signal hidden by metrics.\n"
+    "  [#11:4/4-FAV-1-5->C-DART] = include as SLEEPER HR if HPI>=3.0 after adj.\n"
+    "  [#12:ELITE-BARREL+BOOSTER->B-DART] = include as SLEEPER HR pick.\n"
+    "  [#5:LATE-BULLPEN-ERA5.xx->HIT-LIVE] = include as SLEEPER HIT regardless of grade.\n\n"
+
+    "PITCHER GAP NOTE:\n"
+    "  Pitcher positive gap (xwOBA > wOBA) = pitcher BETTER than results = tighten gate.\n"
+    "  Pitcher negative gap (wOBA > xwOBA) = pitcher been LUCKY = more hits coming.\n"
+    "  PITCHER-LUCKY flag = opens gate half step even if score says HALF/CLOSED.\n\n"
+
+    "MAX HIT SPEED:\n"
+    "  MAX-SPEED>=115 = top-1% ceiling. Batter with MAX-SPEED=116 + EV50=100 has more HR upside\n"
+    "  than EV50=103 + MAX-SPEED=108. Market prices averages. You price ceiling.\n\n"
 
     "LINEUP SPOT = PA EDGE:\n"
-    "  Spot #1-2 with wOBA>=.330 vs HITTABLE pitcher (gate 0-1) = near-lock hit anchor.\n"
-    "  Spot #1-2 always call out the ~4.5PA advantage explicitly in picks.\n"
+    "  Spot #1-2 with wOBA>=.330 vs HITTABLE pitcher = near-lock hit anchor.\n"
     "  Spot #6-9 with [#5:LATE-BULLPEN] flag = bullpen exposure edge for hits.\n\n"
 
-    "GAP=xwOBA-wOBA. Positive=COLD. Negative=HOT. [PROXY]=no 2026 data, max B.\n\n"
+    "GAP=xwOBA-wOBA. Positive=COLD. Negative=HOT. [PROXY]=no 2026 data, max B grade.\n\n"
 
-    "OUTPUT FORMAT — PICKS FIRST, ANALYSIS AFTER:\n"
-    "Write in this exact order. Do not deviate. Picks come FIRST so they are never cut off.\n\n"
+    "OUTPUT FORMAT — THIS IS THE ONLY ACCEPTED FORMAT:\n\n"
 
-    "## PICKS\n\n"
-    "**HR #1:** [Name] ([Team]) | Grade: [A/A-/B+/B] | Adj-HPI: [X] (base=[X] SAME=[0/-0.3/-0.5] gate=[0/-0.5/-1.0] hr9=[0/+0.25/+0.5/+0.75]) | [odds]\n"
-    "[FAV platoon = 0 adjustment. Show math inline so it's auditable.]\n"
-    "[3 sentences: key metrics + pitcher vulnerability + specific edge.]\n\n"
-    "**HR #2:** [Name] ([Team]) | Grade: [X] | Adj-HPI: [X] | [odds]\n"
-    "[3 sentences]\n"
-    "OR: **NO HR #2** — [one-line reason]\n\n"
-    "**HIT #1:** [Name] ([Team]) | Grade: [X] | [odds]\n"
-    "[2 sentences: wOBA/xwOBA + pitcher gate + edge]\n\n"
-    "**HIT #2:** [Name] ([Team]) | Grade: [X] | [odds]\n"
-    "[2 sentences]\n"
-    "OR: **NO HIT #2** — [one-line reason]\n\n"
-    "**SLEEPER HR #1:** [Name] ([Team]) | [odds] | SIGNALS: [list] | [2 sentences]\n"
-    "**SLEEPER HR #2:** [Name] ([Team]) | [odds] | SIGNALS: [list] | [2 sentences]\n"
-    "OR: **NO SLEEPER HR** — no mispriced edge.\n\n"
-    "**SLEEPER HIT #1:** [Name] ([Team]) | [odds] | [2 sentences]\n"
-    "**SLEEPER HIT #2:** [Name] ([Team]) | [odds] | [2 sentences]\n"
-    "OR: **NO SLEEPER HIT** — no mispriced edge.\n\n"
-    "**ML:** [Team] | [odds] | [2 sentences] OR: **NO ML EDGE**\n\n"
-    "**TOTALS:** OVER/UNDER [line] | [odds] | [2 sentences] OR: **NO TOTALS EDGE**\n\n"
+    "Produce separate TOP 10 ranked lists for each category below.\n"
+    "Rank each list by confidence — #1 is highest conviction, #10 is weakest that still qualifies.\n"
+    "If fewer than 10 picks clear the threshold for a category, stop at however many do.\n"
+    "DO NOT pad to reach 10. DO NOT force picks that don't meet thresholds.\n"
+    "A category with zero qualifying picks gets: 'NO QUALIFYING PICKS — [one-line reason]'\n\n"
+
+    "PICK FORMAT — use this exact structure for every pick in every list:\n"
+    "#[N]. [BATTER NAME] ([BATTER TEAM]) | FACES: [PITCHER NAME] ([PITCHER TEAM]) | [ODDS]\n"
+    "  [2 sentences: specific metrics + pitcher vulnerability + the edge. No vague language.]\n\n"
+
+    "For ML/Totals/F5 picks use:\n"
+    "#[N]. [TEAM or GAME] | [ODDS]\n"
+    "  [2 sentences: factors that qualify this pick.]\n\n"
+
+    "IDENTITY CHECK — before writing any pick:\n"
+    "  Confirm: BATTER TEAM ≠ PITCHER TEAM. They are always on opposite teams.\n"
+    "  The FACES= tag on each batter's context line is ground truth. Use it.\n"
+    "  Example: Alvarez (Astros) | FACES: Melton (Tigers) ✓\n"
+    "  Example: Alvarez (Astros) | FACES: Imai (Astros) ✗ — same team, you have it backwards.\n\n"
+
+    "---\n\n"
+    "## TOP 10 HOME RUN PICKS\n"
+    "Ranked by Adj-HPI and matchup quality. Only picks with HPI>=4.5 (core) or HPI>=3.0 + 3 signals (sleeper).\n"
+    "No CLOSED gate picks unless batter is 4/4 AND HPI>=6.0 after penalty.\n\n"
+    "[List up to 10 HR picks or NO QUALIFYING PICKS]\n\n"
+
+    "## TOP 10 HIT PICKS\n"
+    "Ranked by contact quality + PA volume + gate favorability.\n"
+    "Negative juice (-120 or worse) only: wOBA>=.370 AND gate OPEN/HALF AND spot #1-3.\n"
+    "At -135 or worse: wOBA>=.390 AND gate OPEN AND spot #1-2 only.\n\n"
+    "[List up to 10 hit picks or NO QUALIFYING PICKS]\n\n"
+
+    "## TOP 10 TOTAL BASES PICKS (1.5+ TB or 2.5+ TB)\n"
+    "Use when XBH environment exists: Barrel%>=15 + booster park OR wind OUT 8mph+ + wOBA>=.360.\n"
+    "1.5+ TB is often better EV than 1+ hit in carry environments. Double OR HR both count.\n"
+    "Label each pick: 1.5+TB or 2.5+TB.\n\n"
+    "[List up to 10 TB picks or NO QUALIFYING PICKS]\n\n"
+
+    "## TOP 10 MONEYLINE PICKS\n"
+    "Need 3+ factors: xwOBA gap>0.050 | bullpen tier edge | run diff>20 | W4+ streak | home field.\n"
+    "Juice -145 or better + 3 factors = take it. Juice -185+ = need 4+ factors.\n"
+    "Include F5 ML here when starter edge is clear but pens are uncertain — label F5 ML explicitly.\n\n"
+    "[List up to 10 ML picks or NO QUALIFYING PICKS]\n\n"
+
+    "## TOP 10 OVER/UNDER PICKS\n"
+    "OVER: both pitchers gate 0-1 + wind OUT 8mph+ + temp>80F + pen ERA>5.00.\n"
+    "UNDER: both pitchers gate 2+ + wind IN or dome + cold <55F + pens ERA<3.50.\n"
+    "F5 UNDER: one or both starters CLOSED gate — label F5 UNDER explicitly.\n"
+    "F5 OVER: starter Form14 ERA>6.00 + OPEN gate — label F5 OVER explicitly.\n"
+    "Label each: OVER / UNDER / F5 OVER / F5 UNDER.\n\n"
+    "[List up to 10 O/U picks or NO QUALIFYING PICKS]\n\n"
+
+    "## TOP 5 CORRELATED SAME-GAME PARLAYS (SGP)\n"
+    "Allowed: Team ML + 2 hitters from that team to get hits.\n"
+    "Allowed: Team OVER + leadoff hitter hit + cleanup hitter hit.\n"
+    "BANNED: Same-game HR parlays — independent events, no correlation.\n"
+    "Label each: SGP [Game]\n\n"
+    "[List up to 5 SGPs or NO QUALIFYING PICKS]\n\n"
+
     "---\n\n"
     "## GAME READS\n"
-    "[Pitching gates, environment math, key batter analysis — concise bullets, no more than 400 words total]\n\n"
+    "[One paragraph per game. Pitching gates, key batter analysis, environment. Max 150 words per game.]\n\n"
 
     "PICK RULES:\n"
-    "Core HR = adjusted HPI>=4.5 after gate/platoon/gap adjustments.\n"
-    "Sleeper HR = 3+ independent signals + HR dist>=380 + HPI>=3.0.\n"
-    "Pitcher HR/9>=1.5 = +0.5 to every qualified batter's adjusted HPI vs that pitcher.\n"
-    "Wind OUT 8mph+: add carry boost to HR dist before checking thresholds.\n"
-    "Wind-adjusted dist still <370ft = STILL DISQUALIFIED. Wind can't save a 355ft hitter.\n"
-    "SAME platoon = -0.3 HPI for power bats (Barrel%>=15), -0.5 for others.\n"
-    "FORM14 2+ HRs in 14 games = +0.5 HPI boost (locked-in power stretch).\n"
+    "Core HR = adjusted HPI>=4.5. Sleeper HR = 3+ signals + HR dist>=380 + HPI>=3.0.\n"
+    "Pitcher HR/9>=1.5 = +0.5 HPI to all qualified batters facing that pitcher.\n"
+    "Wind OUT 8mph+: add carry boost before checking thresholds.\n"
+    "Wind-adjusted dist <370ft = DISQUALIFIED regardless of wind.\n"
+    "SAME platoon = -0.3 HPI (Barrel%>=15), -0.5 HPI (others).\n"
+    "FORM14 2+ HRs = +0.5 HPI boost.\n"
     "HOT gap fades HR only. HOT-EXTREME (>=.120) fades HR AND hits.\n"
-    "wOBA>=.370 with HOT gap = real hitter, hits remain live, HR faded.\n\n"
+    "wOBA>=.370 with HOT gap = real hitter, hits live, HR faded.\n\n"
 
     "ML/TOTALS RULES:\n"
-    "ML: need 3+ — xwOBA gap>0.050 | bullpen tier edge | run diff>20 | W4+ streak (W2/W3 = NOT meaningful) | home field.\n"
-    "  If juice is -145 or better AND 3 factors align = take it. If juice is -185+ = need 4+ factors.\n"
-    "  Think about what the market is mispricing: a team's FORM14 hot stretch + starter on STRUGGLING\n"
-    "  stretch = real ML edge even if season stats say otherwise. Check FORM14 data in context.\n"
-    "OVER: both pitchers hittable (gate 0-1) + wind OUT 8mph+ + temp>80F + weak pen >5.00 ERA.\n"
-    "  OVER lean at 2 factors when wind OUT is very strong (12mph+) — wind alone changes run environment.\n"
-    "UNDER: both pitchers elite (gate 2+) + wind IN 8mph+ + cold <55F + strong pens <3.50 ERA.\n"
-    "  UNDER lean at 2 factors when both starters are CLOSED (3-4/4) + DOME environment.\n"
-    "  Grounder pitcher (GB%>50) + wind IN = UNDER lean regardless of other factors.\n"
-    "Sharp OVER plays: STRUGGLING pitcher (ERA>6 last 14 days) with OPEN gate in warm outdoor park.\n"
-    "Sharp UNDER plays: DOME + two CLOSED gates + combined pens ERA<4.0 = score under 7.\n\n"
+    "ML: need 3+ factors — xwOBA gap>0.050 | bullpen tier edge | run diff>20 | W4+ streak | home field.\n"
+    "  Juice -145 or better + 3 factors = take it. Juice -185+ = need 4+ factors.\n"
+    "OVER: both pitchers hittable (gate 0-1) + wind OUT 8mph+ + temp>80F + weak pen ERA>5.00.\n"
+    "UNDER: both pitchers elite (gate 2+) + wind IN 8mph+ + cold <55F + strong pens ERA<3.50.\n"
+    "F5 UNDER: one or both starters CLOSED gate. Sharper than full-game when pens are uncertain.\n"
+    "F5 OVER: starter with Form14 ERA>6.00 + OPEN gate. Get the runs before he exits.\n\n"
     + LOCKED_RULES
 )
 
@@ -1787,6 +1883,11 @@ HARD RULES (non-negotiable):
 - Max 2 legs per game in hit parlays. Spread across 3+ games for 4-5 leg parlays.
 - Wind-adjusted HR dist <370ft = dead. Skip it.
 - ML/Totals: only use picks explicitly confirmed. Outside-the-box lean is fine but label it clearly.
+- NO CLOSED GATE HR legs in SHARP parlays unless batter is 4/4 grade. A 3/4 batter vs CLOSED gate does not belong in a sharp parlay.
+- NO hit legs at -135 or worse unless wOBA>=.380 AND gate OPEN. Expensive juice on mediocre matchups kills parlay EV.
+- If a game has NO qualified picks (both pitchers elite, no batter clears threshold), DO NOT force a leg from that game into a parlay. Skip it entirely.
+- SLEEPER legs in parlays: must have 3+ independent signals. COLD gap alone is not enough. Never include a sleeper just to reach leg count.
+- If you can't build a 5-leg parlay with genuine edges, build a 4-leg. Quality over leg count always.
 
 OUTSIDE THE BOX ANGLES (use these to build contrarian versions):
 - Regression bombs: batters with COLD gap >= +.060 that the market ignores completely
@@ -3051,7 +3152,7 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
                 f"Pens: {pen_str}")
 
         # Per-game picks — include game label + full picks section
-        parlay_ctx_lines.append("\n\nPER-GAME PICKS (HR, HIT, SLEEPER, ML, TOTALS):")
+        parlay_ctx_lines.append("\n\nPICKS BY CATEGORY (from per-game analyses):")
         ml_totals_found = []
 
         for i, (ga, gd) in enumerate(zip(game_analyses, game_data)):
@@ -3059,13 +3160,23 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
             g = env['game']
             game_label = f"{g.get('away_team','?')} @ {g.get('home_team','?')}"
 
-            # Extract picks section
-            picks_start = ga.find('## PICKS')
+            # Extract picks section — new format uses TOP 10 headers
             reads_start = ga.find('## GAME READS')
-            if picks_start >= 0 and reads_start >= 0:
-                picks_section = ga[picks_start:reads_start].strip()
-            elif picks_start >= 0:
-                picks_section = ga[picks_start:].strip()
+            hr_start = ga.find('## TOP 10 HOME RUN PICKS')
+            legacy_start = ga.find('## PICKS')
+
+            if hr_start >= 0:
+                # New format
+                if reads_start >= 0:
+                    picks_section = ga[hr_start:reads_start].strip()
+                else:
+                    picks_section = ga[hr_start:].strip()
+            elif legacy_start >= 0:
+                # Legacy format fallback
+                if reads_start >= 0:
+                    picks_section = ga[legacy_start:reads_start].strip()
+                else:
+                    picks_section = ga[legacy_start:].strip()
             else:
                 picks_section = ga[:3000]
 
