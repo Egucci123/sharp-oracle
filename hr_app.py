@@ -1892,46 +1892,38 @@ Label: OVER / UNDER / F5 OVER / F5 UNDER
 #N. Away @ Home | LINE | ODDS
   WHY: [qualifying factors]
 
-## TOP 3 PARLAYS
+## TOP 10 PARLAYS
 
-Build exactly 3 parlays. These are the 3 bets Marcus would actually place today.
-Each has a different thesis. Think of them as:
+Build exactly 10 parlays ranked by confidence — #1 is highest conviction, #10 is the biggest swing.
+Every parlay must have a DIFFERENT thesis. No two parlays can share the same angle.
+Only use picks from the lists above. No same-game HR parlays ever.
 
-PARLAY 1 = THE ANCHOR: safest combination, highest hit rate, moderate payout (~+300 to +800)
-  Use the top 2-3 picks from the hit list + one ML. Low variance, high confidence.
-
-PARLAY 2 = THE VALUE PLAY: best risk/reward, 3-4 legs, strong data thesis (~+800 to +3000)
-  Mix HR picks with hits or ML. Different games. One clear connecting angle.
-
-PARLAY 3 = THE LOTTERY TICKET: maximum upside, sleepers + regression bombs (~+3000 to +20000)
-  Use sleepers, COLD gap bombs, plus-money picks the market ignores. 4-5 legs.
+PARLAY TYPES to draw from — use each type at most twice:
+- ANCHOR (2-3 legs, hit props + ML, highest probability, ~+200 to +600)
+- HR STACK (2-4 legs, pure HR picks sharing a common edge — pitcher HR/9, wind, COLD gap)
+- HIT VOLUME (3-5 legs, leadoff/top-order hitters with max PA, ~+300 to +1200)
+- ML PARLAY (2-4 ML picks with 3+ factors each, ~+200 to +800)
+- MIXED VALUE (3-4 legs mixing HR + hit + ML, best risk/reward, ~+800 to +3000)
+- REGRESSION STACK (3-5 legs, all COLD gap regression buys across games, ~+1000 to +5000)
+- PITCHER VULTURE (3-4 legs, all batters facing pitchers with HR/9>=1.4, ~+1500 to +6000)
+- SLEEPER BOMB (4-5 legs, all plus-money sleepers with 3+ signals, ~+5000 to +20000)
 
 RULES:
-- Only use picks from the lists above
-- No same-game HR parlays ever
-- Same-game hits are fine (correlated with team scoring)
-- Every leg must be from a different game UNLESS it is a same-game hit correlated play
-- Show legs, combined odds estimate, unit size, and one-sentence thesis
+- No same-game HR parlays (independent events, zero correlation)
+- Same-game hit parlays OK when legs are correlated (if team scores, top hitters likely contributed)
+- Every leg earns its spot — no padding to reach a leg count
+- Different games preferred; max 2 legs from same game
+- If you can't build 10 distinct parlays with genuine edges, stop and explain why
 
-Format each parlay exactly like this:
+Format every parlay like this:
 
-**PARLAY 1 — THE ANCHOR** | ~+[odds] | Suggested: 0.5u
-- [Pick] ([Team]) | [bet type] | [odds]
-- [Pick] ([Team]) | [bet type] | [odds]
-THESIS: [1 sentence explaining what connects these and why it hits]
+**#N. [PARLAY NAME]** | ~+[combined odds] | Suggested: [unit size]
+- [Pick 1] ([Team]) | [HIT/HR/ML/OVER] | [odds]
+- [Pick 2] ([Team]) | [HIT/HR/ML/OVER] | [odds]
+[additional legs...]
+THESIS: [1 sentence — the specific edge connecting all legs. Name the angle explicitly.]
 
-**PARLAY 2 — THE VALUE PLAY** | ~+[odds] | Suggested: 0.25u
-- [Pick] ([Team]) | [bet type] | [odds]
-- [Pick] ([Team]) | [bet type] | [odds]
-- [Pick] ([Team]) | [bet type] | [odds]
-THESIS: [1 sentence]
-
-**PARLAY 3 — THE LOTTERY TICKET** | ~+[odds] | Suggested: 0.1u
-- [Pick] ([Team]) | [bet type] | [odds]
-- [Pick] ([Team]) | [bet type] | [odds]
-- [Pick] ([Team]) | [bet type] | [odds]
-- [Pick] ([Team]) | [bet type] | [odds]
-THESIS: [1 sentence]
+Unit size guide: #1-3 = 0.5u | #4-6 = 0.25u | #7-10 = 0.1u
 
 ## MARCUS'S CARD
 **TOP PLAY:** [single best bet on the board — the one pick above all others with 1-2 sentence reasoning]
