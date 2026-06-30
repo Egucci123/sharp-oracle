@@ -2994,7 +2994,7 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
 
             # Add game label header
             parlay_ctx_lines.append(f"\n--- {game_label} ---")
-            parlay_ctx_lines.append(picks_section[:5000])
+            parlay_ctx_lines.append(picks_section[:3000])
 
             # Separately extract ML/Totals from the FULL analysis (not truncated)
             for line in ga.split('\n'):
@@ -3024,7 +3024,7 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
         parlay_analysis = call_claude(
             [{'role': 'user', 'content': '\n'.join(parlay_ctx_lines)}],
             system=PARLAY_SYSTEM,
-            max_tokens=5000,
+            max_tokens=8000,
             temperature=0.2
         )
         step_set(jid, 4, 'done', 'Parlays built')
