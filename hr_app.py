@@ -418,8 +418,24 @@ SYSTEM_PROMPT = (
     "Hit at -135 or worse: wOBA>=.390 AND gate OPEN AND spot #1-2 only.\n\n"
 
     "ML/TOTALS RULES:\n"
+    "ML PITCHER IDENTITY — MANDATORY CHECK BEFORE ANY ML PICK:\n"
+    "  Each pitcher's context line shows: [NAME] ([HAND]HP) pitches for [TEAM], FACES [OPP] batters\n"
+    "  'pitches for TEAM' = that pitcher suppresses the OPPONENT, not his own team.\n"
+    "  ALWAYS ask: which team does THIS pitcher pitch FOR? That team's OPPONENT faces him.\n"
+    "  EXAMPLE: 'Suarez pitches for Athletics, FACES Tigers batters'\n"
+    "    → Suarez CLOSED gate SUPPRESSES TIGERS offense. This HURTS Tigers ML.\n"
+    "    → If Valdez is OPEN gate pitching for Tigers, Tigers offense is UNPROTECTED.\n"
+    "    → Combined: Tigers batters suppressed + Athletics batters free = lean Athletics.\n"
+    "  NEVER say 'Team X has an elite pitcher' without confirming which team he pitches FOR.\n"
+    "  NEVER assign a pitcher's gate to help the team he pitches FOR — it helps their OPPONENT.\n\n"
     "ML: need 3+ factors — xwOBA gap>0.050 | bullpen tier edge | run diff>20 | W4+ streak | home field.\n"
     "  Juice -145 or better + 3 factors = take it. Juice -185+ = need 4+ factors.\n"
+    "  xwOBA STARTER GAP: Away pitcher xwOBA allowed vs Home pitcher xwOBA allowed.\n"
+    "  Lower xwOBA allowed = better pitcher = THAT TEAM'S OPPONENT benefits.\n"
+    "  If Away pitcher xwOBA=.267 and Home pitcher xwOBA=.340:\n"
+    "    Away pitcher is elite → HOME team batters are suppressed → edge to AWAY team offense.\n"
+    "    Home pitcher is hittable → AWAY team batters score freely → edge to AWAY team.\n"
+    "    Combined: edge to AWAY team on both sides = take AWAY team ML.\n\n"
     "OVER: both pitchers hittable (gate 0-1) + wind OUT 8mph+ + temp>80F + weak pen ERA>5.00.\n"
     "UNDER: both pitchers elite (gate 2+) + wind IN 8mph+ + cold <55F + strong pens ERA<3.50.\n"
     "F5 UNDER: one or both starters CLOSED gate. Sharper than full-game when pens are uncertain.\n"
@@ -1864,6 +1880,11 @@ PICK QUALITY RULES:
 - HIT: wOBA>=.370 + OPEN/HALF gate + spot #1-3 for juice. wOBA>=.390 + OPEN + spot #1-2 for -135+.
 - TB (1.5+ or 2.5+): Barrel%>=15 + booster park OR wind OUT 8mph+ + wOBA>=.360.
 - ML: 3+ factors required. F5 ML when starter edge clear but pens uncertain.
+- ML PITCHER DIRECTION: A pitcher pitches FOR his team and suppresses the OPPONENT.
+  'Away pitcher has CLOSED gate' = HOME team batters are suppressed = edge to AWAY offense.
+  Always confirm: which team does each pitcher pitch FOR before assigning ML edge.
+  WRONG: 'Tigers have Suarez CLOSED gate' when Suarez pitches FOR Athletics.
+  RIGHT: 'Suarez (Athletics) CLOSED gate suppresses Tigers batters = hurts Tigers ML.'
 - OVER/UNDER: OVER = 2+ hittable pitchers + environment. UNDER = elite starters + controlled park.
 - No forced picks. Stop where the edge ends.
 
@@ -2926,7 +2947,7 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
             result = call_claude(
                 [{'role': 'user', 'content': gd['ctx']}],
                 system=SYSTEM_PROMPT,
-                max_tokens=4000
+                max_tokens=6000
             )
             game_label = f"{gd['env']['game'].get('away_team','?')} @ {gd['env']['game'].get('home_team','?')}"
             return f"\n{'='*60}\n## {game_label}\n{'='*60}\n{result}"
@@ -2956,9 +2977,9 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
             })
 
         # Build parlay context directly from game data
-        parlay_ctx_lines = ["=== SLATE PICKS FOR PARLAY CONSTRUCTION ===\n"]
+        parlay_ctx_lines = ["=== SLATE PICKS FOR SHARP OUTPUT ===\n"]
 
-        # Game environments with wind/park/pen context
+        # Game environments
         parlay_ctx_lines.append("GAME ENVIRONMENTS:")
         for gd in game_data:
             env = gd['env']
@@ -2971,8 +2992,10 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
                 f"{env['weather'].get('temp_f','?')}F | Wind: {wi.get('label','unknown')} | "
                 f"Pens: {pen_str}")
 
-        # Per-game picks — include game label + full picks section
-        parlay_ctx_lines.append("\n\nPICKS BY CATEGORY (from per-game analyses):")
+        # Per-game picks — NO TRUNCATION
+        # Extract ONLY the picks section (between ## PICKS and ## GAME READS)
+        # This keeps context lean without losing any pick data
+        parlay_ctx_lines.append("\n\nPER-GAME PICKS (every pick from every game):")
         ml_totals_found = []
 
         for i, (ga, gd) in enumerate(zip(game_analyses, game_data)):
@@ -2980,7 +3003,7 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
             g = env['game']
             game_label = f"{g.get('away_team','?')} @ {g.get('home_team','?')}"
 
-            # Extract picks section from per-game analysis
+            # Extract ONLY picks section — exclude game reads to save tokens
             reads_start = ga.find('## GAME READS')
             picks_start = ga.find('## PICKS')
 
@@ -2990,41 +3013,44 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
                 else:
                     picks_section = ga[picks_start:].strip()
             else:
-                picks_section = ga[:3000]
+                picks_section = ga[:5000]
 
-            # Add game label header
             parlay_ctx_lines.append(f"\n--- {game_label} ---")
-            parlay_ctx_lines.append(picks_section[:3000])
+            # NO truncation — send full picks section for every game
+            parlay_ctx_lines.append(picks_section)
 
-            # Separately extract ML/Totals from the FULL analysis (not truncated)
+            # Extract ML/Totals picks
             for line in ga.split('\n'):
                 s = line.strip()
                 is_ml = s.startswith('**ML:') and 'NO ML EDGE' not in s and 'NO ML' not in s.upper()[:20]
                 is_tot = s.startswith('**TOTALS:') and 'NO TOTALS EDGE' not in s and 'NO TOTALS' not in s.upper()[:25]
-                if is_ml or is_tot:
+                is_f5 = s.startswith('**F5:') and 'NO F5' not in s.upper()[:15]
+                if is_ml or is_tot or is_f5:
                     ml_totals_found.append((game_label, s))
 
-        # Explicit ML/Totals summary
-        parlay_ctx_lines.append("\n\n=== CONFIRMED ML/TOTALS PICKS ACROSS SLATE ===")
+        # ML/Totals summary
+        parlay_ctx_lines.append("\n\n=== CONFIRMED ML/TOTALS/F5 PICKS ACROSS SLATE ===")
         if ml_totals_found:
             for game_label, pick_line in ml_totals_found:
                 parlay_ctx_lines.append(f"  [{game_label}] {pick_line}")
         else:
-            parlay_ctx_lines.append("  (No explicit ML/Totals picks found — use outside-the-box rules from environment data)")
+            parlay_ctx_lines.append("  (No explicit ML/Totals picks found)")
 
-        # Final instructions
         parlay_ctx_lines.append(
-            "\n\nBUILD ALL REQUIRED PARLAYS using the picks and environments above."
-            "\nHARD RULES: No same-game HR parlays. Max 2 legs/game in hit parlays."
-            "\nFor ML/Totals: use confirmed picks first, then apply outside-the-box rules"
-            " (wind stacks, grounder pitcher + wind IN = UNDER, DOME + two CLOSED gates = UNDER lean, etc)"
-            "\nBe creative and vary each parlay size — different themes, different angles."
+            "\n\nIMPORTANT: You MUST scan ALL picks from ALL games above."
+            "\nDo not default to only the high-profile players. Look at every"
+            " SLEEPER HR, SLEEPER HIT, TB PICK, plus-money pick across all games."
+            "\nThe best picks are often buried in spot #6-9 with COLD gaps or elite"
+            " carry metrics. Rank by the data, not by name recognition."
+            "\nML DIRECTION REMINDER: A pitcher suppresses the OPPOSING team's batters."
+            " 'Away pitcher CLOSED gate' = HOME team batters suppressed = edge to AWAY offense."
         )
+
 
         parlay_analysis = call_claude(
             [{'role': 'user', 'content': '\n'.join(parlay_ctx_lines)}],
             system=PARLAY_SYSTEM,
-            max_tokens=8000,
+            max_tokens=10000,
             temperature=0.2
         )
         step_set(jid, 4, 'done', 'Parlays built')
