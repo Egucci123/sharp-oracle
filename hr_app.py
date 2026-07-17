@@ -21,8 +21,8 @@ from urllib.parse import urlparse, parse_qs
 CURRENT_YEAR = 2026
 PORT = int(os.environ.get('PORT', 8080))
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
-MODEL = 'claude-sonnet-4-5'
-MODEL_FAST = 'claude-haiku-4-5'  # For mechanical tasks: parsing, extraction, JSON
+MODEL      = 'claude-sonnet-4-5'       # Synthesis: LISTS, PARLAYS, single-game analysis
+MODEL_FAST = 'claude-haiku-4-5-20251001'  # Per-game picks: mechanical scoring, cheaper
 
 _HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
@@ -1607,95 +1607,7 @@ Input to parse:
     return []
 
 
-PARLAY_SYSTEM = """You are Marcus Cole. 15 years capping sports. You find edges and bet them.
 
-IDENTITY CHECK — EVERY PICK:
-Format: BATTER NAME (BATTER TEAM) | FACES: PITCHER NAME (PITCHER TEAM)
-Batter team NEVER equals pitcher team. Use the FACES= tag as ground truth.
-
-PICK QUALITY RULES:
-- HR: HPI>=4.5 core. HPI>=3.0 + 3 signals for sleepers. CLOSED gate only 4/4 batters HPI>=6.0.
-- HIT: wOBA>=.370 + OPEN/HALF gate + spot #1-3 for juice. wOBA>=.390 + OPEN + spot #1-2 for -135+.
-- TB (1.5+ or 2.5+): Barrel%>=15 + booster park OR wind OUT 8mph+ + wOBA>=.360.
-- ML: 3+ factors required. F5 ML when starter edge clear but pens uncertain.
-- ML PITCHER DIRECTION: A pitcher pitches FOR his team and suppresses the OPPONENT.
-  'Away pitcher has CLOSED gate' = HOME team batters are suppressed = edge to AWAY offense.
-  Always confirm: which team does each pitcher pitch FOR before assigning ML edge.
-  WRONG: 'Tigers have Suarez CLOSED gate' when Suarez pitches FOR Athletics.
-  RIGHT: 'Suarez (Athletics) CLOSED gate suppresses Tigers batters = hurts Tigers ML.'
-- OVER/UNDER: OVER = 2+ hittable pitchers + environment. UNDER = elite starters + controlled park.
-- No forced picks. Stop where the edge ends.
-
-OUTPUT — PRODUCE EXACTLY THESE SECTIONS:
-
-## TOP 10 HOME RUN PICKS
-Ranked #1 to #10. Stop early if fewer qualify.
-#N. BATTER (TEAM) | FACES: PITCHER (TEAM) | +ODDS
-  WHY: [2 sentences — metrics + pitcher vulnerability + edge]
-
-## TOP 10 HIT PICKS
-Ranked by contact quality x PA volume x gate.
-Same format.
-
-## TOP 10 TOTAL BASES PICKS
-Label each 1.5+TB or 2.5+TB. Only when XBH environment exists.
-Same format. If none qualify: NO QUALIFYING TB PICKS today.
-
-## TOP 10 MONEYLINE PICKS
-Include F5 ML where applicable — label it F5 ML.
-#N. TEAM | ML or F5 ML | ODDS
-  WHY: [3+ factors]
-
-## TOP 10 OVER/UNDER PICKS
-Label: OVER / UNDER / F5 OVER / F5 UNDER
-#N. Away @ Home | LINE | ODDS
-  WHY: [qualifying factors]
-
-## TOP 10 PARLAYS
-
-Build exactly 10 parlays ranked by confidence — #1 is highest conviction, #10 is the biggest swing.
-Every parlay must have a DIFFERENT thesis. No two parlays can share the same angle.
-Only use picks from the lists above. No same-game HR parlays ever.
-
-PARLAY TYPES to draw from — use each type at most twice:
-- ANCHOR (2-3 legs, hit props + ML, highest probability, ~+200 to +600)
-- HR STACK (2-4 legs, pure HR picks sharing a common edge — pitcher HR/9, wind, COLD gap)
-- HIT VOLUME (3-5 legs, leadoff/top-order hitters with max PA, ~+300 to +1200)
-- ML PARLAY (2-4 ML picks with 3+ factors each, ~+200 to +800)
-- MIXED VALUE (3-4 legs mixing HR + hit + ML, best risk/reward, ~+800 to +3000)
-- REGRESSION STACK (3-5 legs, all COLD gap regression buys across games, ~+1000 to +5000)
-- PITCHER VULTURE (3-4 legs, all batters facing pitchers with HR/9>=1.4, ~+1500 to +6000)
-- SLEEPER BOMB (4-5 legs, all plus-money sleepers with 3+ signals, ~+5000 to +20000)
-
-RULES:
-- No same-game HR parlays (independent events, zero correlation)
-- Same-game hit parlays OK when legs are correlated (if team scores, top hitters likely contributed)
-- Every leg earns its spot — no padding to reach a leg count
-- Different games preferred; max 2 legs from same game
-- If you can't build 10 distinct parlays with genuine edges, stop and explain why
-
-Format every parlay like this:
-
-**#N. [PARLAY NAME]** | ~+[combined odds] | Suggested: [unit size]
-- [Pick 1] ([Team]) | [HIT/HR/ML/OVER] | [odds]
-- [Pick 2] ([Team]) | [HIT/HR/ML/OVER] | [odds]
-[additional legs...]
-THESIS: [1 sentence — the specific edge connecting all legs. Name the angle explicitly.]
-
-Unit size guide: #1-3 = 0.5u | #4-6 = 0.25u | #7-10 = 0.1u
-
-## MARCUS'S CARD
-**TOP PLAY:** [single best bet on the board — the one pick above all others with 1-2 sentence reasoning]
-**SLEEPER OF THE SLATE:** [best +500 or better with 3+ signals — what the market is missing]
-**FADE:** [what looks good but has a real flaw — name the flaw specifically]
-**TODAY'S ALLOCATION (2 units total):**
-- [straight bet 1]: [size]u — [one phrase why]
-- [straight bet 2]: [size]u — [one phrase why]
-- Parlay 1 (Anchor): 0.5u
-- Parlay 2 (Value): 0.25u
-- Parlay 3 (Lottery): 0.1u
-Total: 2.0u
-"""
 PARLAYS_SYSTEM = """You are Marcus Cole. Build parlays from the picks provided.
 
 RULES:
@@ -2234,11 +2146,12 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
                     ptrend = 'HOT-STRETCH' if era14 <= 2.50 else ('STRUGGLING' if era14 >= 6.00 else 'NEUTRAL')
                     pitcher_form_str = f' | FORM14=ERA{era14:.2f}({ip14}IP,{hr14}HR){ptrend}'
 
-        # Pitcher gap: positive = pitcher BETTER than wOBA suggests (opposite of batter)
+        # Pitcher gap: xwOBA_allowed > wOBA_allowed = pitcher LUCKY (got outs on hard contact)
+        # xwOBA_allowed < wOBA_allowed = pitcher OUTPERFORMING (limiting damage despite hard contact)
         gap_note = ''
         if g is not None:
-            if g > 0.030:   gap_note = '(PITCHER-OUTPERFORMING-xwOBA->gate-may-be-soft)'
-            elif g < -0.030: gap_note = '(PITCHER-LUCKY->expect-more-hits-coming)'
+            if g > 0.030:   gap_note = '(PITCHER-LUCKY->more-damage-due->bet-batters)'
+            elif g < -0.030: gap_note = '(PITCHER-OUTPERFORMING->tighten-gate)'
 
         lines.append(
             f"  {proxy}{p.get('name','?')} ({p.get('hand','?')}HP) "
@@ -2468,8 +2381,20 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
         if gb:  parts.append(f"GB%={gb}")
         return f"{name}: {' | '.join(parts)}"
 
-    lines.append(f"  HOME pitcher ({home}): {pitcher_summary(home_p)}")
-    lines.append(f"  AWAY pitcher ({away}): {pitcher_summary(away_p)}")
+    lines.append(f"  HOME pitcher ({home}) pitches FOR {home}, FACES {away} batters: {pitcher_summary(home_p)}")
+    lines.append(f"  AWAY pitcher ({away}) pitches FOR {away}, FACES {home} batters: {pitcher_summary(away_p)}")
+
+    # Compute ML starter edge explicitly — state which team benefits
+    if home_p and away_p:
+        home_xw = home_p.get('xwoba') or 0
+        away_xw = away_p.get('xwoba') or 0
+        gap = round(away_xw - home_xw, 3)
+        if gap > 0.030:
+            lines.append(f"  ML STARTER EDGE → {home} offense: AWAY pitcher ({away_p.get('name')}) xwOBA={away_xw:.3f} more hittable than HOME pitcher ({home_p.get('name')}) xwOBA={home_xw:.3f}. Gap={gap:+.3f} favors {home} scoring.")
+        elif gap < -0.030:
+            lines.append(f"  ML STARTER EDGE → {away} offense: HOME pitcher ({home_p.get('name')}) xwOBA={home_xw:.3f} more hittable than AWAY pitcher ({away_p.get('name')}) xwOBA={away_xw:.3f}. Gap={abs(gap):.3f} favors {away} scoring.")
+        else:
+            lines.append(f"  ML STARTER EDGE → NEUTRAL: xwOBA gap={gap:+.3f} too small to differentiate.")
 
     # Lineup quality for totals
     for team, opp_pitcher_p in [(home, away_p), (away, home_p)]:
@@ -2537,14 +2462,15 @@ def build_context(parsed, all_statcast, weather, park_name, park_cat, pen_era, r
         lines.append(f"  WIND: {wi_label or 'calm/crosswind'} → neutral totals impact")
 
     lines.append('')
-    lines.append('ML/TOTALS GUIDANCE FOR MARCUS:')
-    lines.append('  MONEYLINE: need 3+ of these — starter xwOBA gap >0.050 | bullpen tier gap | team run diff gap >20 | streak (W3+) | home field.')
-    lines.append('  OVER: both pitchers hittable (gate 0-1) + wind OUT 8mph+ + warm temp (>75F) + weak pens (ERA>5.0).')
-    lines.append('  UNDER: both pitchers elite (gate 2+) + wind IN 8mph+ + cold (<55F) + strong pens (ERA<3.50).')
-    lines.append('  Team on W-streak 4+ with positive run diff = meaningful ML lean TOWARD them.')
-    lines.append('  Only pick ML/Totals when 3+ factors clearly align. Never force.')
-    lines.append('  Bullpen ERA UNKNOWN = skip ML pick, only give Totals if other factors align.')
-    lines.append('  Only give ML/Totals picks when 3+ factors align. One factor is never enough.')
+    lines.append('ML/TOTALS GUIDANCE:')
+    lines.append('  ML DIRECTION: "ML STARTER EDGE → TEAM X" means TEAM X scores more = bet TEAM X.')
+    lines.append('  A pitcher with high xwOBA allowed = OPPOSING team benefits, not his own team.')
+    lines.append('  Kremer HR/9=3.37 pitching FOR Orioles = ASTROS score on him = bet ASTROS not Orioles.')
+    lines.append('  MONEYLINE: need 3+ factors all pointing to SAME team — starter edge + bullpen + run diff + streak + home field.')
+    lines.append('  DO NOT pick a team because their pitcher is bad. Pick a team because their OPPONENT\'s pitcher is bad.')
+    lines.append('  OVER: both pitchers hittable (gate 0-1) + wind OUT 8mph+ + warm (>75F) + weak pens (ERA>5.0).')
+    lines.append('  UNDER: both pitchers elite (gate 2+) + wind IN or dome + cold (<55F) + strong pens (ERA<3.50).')
+    lines.append('  Only pick ML when 3+ factors all point to SAME team. Never force.')
 
     return '\n'.join(lines)
 
@@ -2731,7 +2657,8 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
             result = call_claude(
                 [{'role': 'user', 'content': gd['ctx']}],
                 system=SYSTEM_PROMPT,
-                max_tokens=6000
+                max_tokens=6000,
+                model=MODEL_FAST  # Haiku handles mechanical per-game scoring
             )
             game_label = f"{gd['env']['game'].get('away_team','?')} @ {gd['env']['game'].get('home_team','?')}"
             return f"\n{'='*60}\n## {game_label}\n{'='*60}\n{result}"
@@ -3045,7 +2972,8 @@ def run_job(jid, sid, raw_lineup, game_date=None):
         analysis = call_claude(
             [{'role': 'user', 'content': ctx}],
             system=SYSTEM_PROMPT,
-            max_tokens=6000
+            max_tokens=6000,
+            model=MODEL_FAST  # Haiku for single game — same as slate per-game
         )
         with store_lock:
             jobs[jid]['result'] = analysis
