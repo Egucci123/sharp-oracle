@@ -53,7 +53,7 @@ HPI (pre-computed — trust the number):
 CONTACT BENCHMARKS:
   EV50>=103=ELITE | >=100=PLUS | <97=WEAK
   FB/LD EV>=96=ELITE | >=94=GOOD | <90=WEAK
-  SS%>=38=ELITE launch angle | HR dist>=410=ELITE carry | <370=DISQUALIFIED
+  SS%>=38=ELITE launch angle | HR dist>=410=ELITE carry (only meaningful if 5+ HRs this season) | <370=DISQUALIFIED
 
 PARK FACTORS (2026):
   ELITE BOOSTER: GABP=1.35 | Coors=1.30 | Yankee=1.28 | CBP-Philly=1.22
@@ -149,26 +149,28 @@ SYSTEM_PROMPT = (
     "  F5 UNDER: one or both starters CLOSED. F5 OVER: Form14 ERA>6.00 + OPEN gate.\n"
     "  F5 lines are 4.5 or 5.0 runs — never 2.5 (that is a team total).\n\n"
 
-    "OUTPUT FORMAT:\n\n"
+    "OUTPUT FORMAT — STRICT RULES:\n"
+    "Compute everything internally. Write each section ONCE. No rejected picks. No recalculations.\n"
+    "Two sentences max per pick. Clean output only.\n\n"
 
     "## PICKS\n\n"
     "**HR #1:** [Name] ([Team]) | FACES: [Pitcher] ([Pitcher Team]) | [odds]\n"
-    "  [2 sentences: Barrel%, ISO, FB/LD EV, pitcher HR/9, park/wind — numbers only]\n"
-    "OR: **NO HR PICKS** — [reason]\n\n"
+    "  [2 sentences max]\n"
+    "OR: **NO HR PICKS**\n\n"
 
     "**HR #2:** [Name] ([Team]) | FACES: [Pitcher] ([Pitcher Team]) | [odds]\n"
-    "  [2 sentences] OR: **NO HR #2** — [reason]\n\n"
+    "  [2 sentences] OR: **NO HR #2**\n\n"
 
     "**HIT #1:** [Name] ([Team]) | FACES: [Pitcher] ([Pitcher Team]) | [odds]\n"
-    "  [2 sentences: wOBA, xwOBA, lineup spot, gate] OR: **NO HIT PICKS** — [reason]\n\n"
+    "  [2 sentences] OR: **NO HIT PICKS**\n\n"
 
     "**HIT #2:** [Name] ([Team]) | FACES: [Pitcher] ([Pitcher Team]) | [odds]\n"
-    "  [2 sentences] OR: **NO HIT #2** — [reason]\n\n"
+    "  [2 sentences] OR: **NO HIT #2**\n\n"
 
     "**TB PICK:** [Name] ([Team]) | FACES: [Pitcher] ([Pitcher Team]) | 1.5+TB or 2.5+TB | [odds]\n"
-    "  [1-2 sentences: why TB over hit] OR: **NO TB PICK**\n\n"
+    "  [1-2 sentences] OR: **NO TB PICK**\n\n"
 
-    "**SLEEPER HR:** [Name] ([Team]) | FACES: [Pitcher] ([Pitcher Team]) | [odds] | SIGNALS: [list 3+]\n"
+    "**SLEEPER HR:** [Name] ([Team]) | FACES: [Pitcher] ([Pitcher Team]) | [odds] | SIGNALS: [3+]\n"
     "  [2 sentences] OR: **NO SLEEPER HR**\n\n"
 
     "**SLEEPER HIT:** [Name] ([Team]) | FACES: [Pitcher] ([Pitcher Team]) | [odds]\n"
@@ -2776,109 +2778,65 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
         # Call 1: Top-10 ranked lists across all categories
         LISTS_SYSTEM = """You are Marcus Cole. Sharp MLB analyst.
 
-CRITICAL — HOW WINNING MODELS ACTUALLY WORK (Dimers, FTA, ProprStats):
-They compute TRUE PROBABILITY then compare to implied book odds.
-A pick only qualifies if TRUE PROB > IMPLIED PROB by at least 3%.
-This is the only thing that matters long-term. Metrics are inputs to probability — not picks themselves.
+Your job is simple: take the picks from every game analysis and rank the best ones into clean top-6 lists.
+The per-game analyses already did the hard work — HPI scores, gate scores, gap analysis, park factors.
+DO NOT recompute anything. DO NOT show math. Just rank and explain.
 
-HOW TO COMPUTE TRUE HR PROBABILITY:
-  base = Barrel% × 0.045 × num_PA  (Barrel% 15 × 4.5 PA = ~3.04% base; ×HR-per-barrel 32% = 9.7%)
-  Better formula: (Barrel% / 100) × num_PA × 0.32 = expected_HRs → prob = 1 - (1-per_PA_rate)^PA
-  Simple approximation: base_prob = Barrel% × 0.045 (single number, not per PA)
-  
-  × park_factor  (BOOSTER 1.15-1.35 | NEUTRAL 1.00 | SUPPRESSOR 0.75-0.88)
-  × pitcher_factor — CRITICAL: HR/9 direction matters
-    HR/9 ≥ 1.8 = ×1.65 (extreme HR risk — bet hard)
-    HR/9 ≥ 1.5 = ×1.35 (high HR risk)
-    HR/9 ≥ 1.2 = ×1.20 (above avg HR risk)
-    HR/9 1.0-1.2 = ×1.05 (near league average — slight boost)
-    HR/9 0.8-1.0 = ×0.90 (below average — slight suppressor)
-    HR/9 < 0.8  = ×0.75 (HR SUPPRESSOR — reduces true probability)
-    FB% ≥ 42 = additional ×1.20 (fly ball pitcher — balls stay up)
-    FB% ≥ 38 = additional ×1.10
-    LOW HR/9 (< 1.0) IS A SUPPRESSOR NOT A BOOSTER. Never use ×1.4+ for a 0.82 HR/9 pitcher.
-  × platoon_factor  (FAV=×1.15 | SAME=×0.88)
-  × pa_factor  (4.5PA=×1.10 | 4.0PA=×1.00 | 3.5PA=×0.90)
-  = TRUE_PROB
-  
-  EXAMPLE CHECK: Alvarez vs Phillips HR/9=0.82
-    base = 19.2 × 0.045 = 8.64% | park ×1.00 | pitcher ×0.90 (suppressor) | FAV ×1.15 | PA ×1.10
-    = 8.64 × 0.90 × 1.15 × 1.10 = 9.8% true prob vs +320 (23.8% implied) = NEGATIVE EDGE — SKIP
-    This is correct. Low HR/9 pitchers suppress HR props even on elite batters.
+RANKING RULES:
+HR picks: rank by Adj-HPI descending. Higher HPI = higher rank. Primary: Barrel%>=15 + OPEN/HALF gate + pitcher HR/9>=1.2.
+Hit picks: rank by wOBA × gate favorability × PA volume. COLD gap (xwOBA>>wOBA) = value signal.
+The per-game analysis already filtered bad picks. Trust those picks. Collate them.
 
-HOW TO COMPUTE IMPLIED PROB FROM ODDS:
-  +380 odds → 100/(380+100) = 20.8% implied
-  +450 odds → 100/(450+100) = 18.2% implied
-  +300 odds → 100/(300+100) = 25.0% implied
-  -110 odds → 110/(110+100) = 52.4% implied
-  -130 odds → 130/(130+100) = 56.5% implied
+IDENTITY: Batter NEVER faces his own team's pitcher. FACES= tag is ground truth.
+ML DIRECTION: Pitcher suppresses OPPOSING batters. Away pitcher CLOSED = HOME batters suppressed = AWAY offense benefits.
 
-ONLY PICK if TRUE_PROB > IMPLIED_PROB + 3% minimum edge.
-Example: Barrel% 20 batter → base 9% × BOOSTER 1.20 × HR/9 1.5 pitcher ×1.35 × FAV 1.15 × 4.5PA 1.10 = 18.4% true prob
-If book has him at +450 (18.2% implied) → edge = 0.2% → NO PICK (insufficient edge)
-If book has him at +550 (15.4% implied) → edge = 3.0% → PICK (minimum edge)
+UNDER RULES:
+- Wind-in only helps UNDER when pitcher FB%>=38. Grounder pitcher (FB%<32) + wind-in = irrelevant.
+- Pen ERA>4.80 = OVER signal. Do NOT pick UNDER when one team has a leaky pen.
+- Mixed starters (one CLOSED + one OPEN) = F5 OVER, not full-game OVER or UNDER.
 
-FOR HIT PROPS — compute true hit probability:
-  base = wOBA × 2.1  (wOBA .370 → ~77.7% hit probability per game — too high, adjust:)
-  Actually: use L10 HIT RATE if available. If not: estimate as (wOBA - .250) × 3.5 + 0.55
-  wOBA .370 → (0.370-0.250)×3.5 + 0.55 = 0.420+0.55 = ... that's wrong
-  Simpler: wOBA .370 = hits in roughly 65% of games | wOBA .330 = 58% | wOBA .290 = 50%
-  Adjust for gate: OPEN +5% | HALF +0% | CLOSED -5%
-  Adjust for platoon: FAV +3% | SAME -3%
-  TRUE HIT PROB = base_hit_rate × gate_adj × platoon_adj
-  IMPLIED PROB from odds: -115 → 53.5% | -130 → 56.5% | +120 → 45.5% | +180 → 35.7%
-  PICK only if TRUE HIT PROB > IMPLIED + 3%
+OUTPUT RULES — NON-NEGOTIABLE:
+1. Each section appears EXACTLY ONCE.
+2. Only include picks that appeared in the per-game analyses.
+3. No math, no probability formulas, no rejected picks, no explanations of what you skipped.
+4. Two sentences max per pick. Clean. Sharp. Done.
+5. If fewer than 6 qualify, stop the list early — do not pad.
 
-IDENTITY: Batter FACES the opponent pitcher. FACES= tag is ground truth. Batter team ≠ pitcher team.
-ML DIRECTION: Pitcher suppresses OPPOSING batters. Away pitcher CLOSED = home batters suppressed = away offense benefits.
-
-KEY SIGNALS (inputs to probability, not picks by themselves):
-  ISO ≥.250 = elite power. ISO ≥.180 = solid. ISO <.120 = low power.
-  Barrel% ≥15 = dangerous. ≥12 = solid. <8 = skip for HR.
-  FB/LD EV ≥96 = elevated contact dangerous. ≥94 = solid.
-  COLD gap (xwOBA>>wOBA) = true production higher than odds reflect = boost true prob.
-  HOT gap (wOBA>>xwOBA) = lucky results = reduce true prob.
-  Pitcher FB% ≥42 = fly ball pitcher = HR vulnerable (boost pitcher_factor).
-  Pitcher HR/9 ≥1.5 = dangerous = boost pitcher_factor.
-  Park BOOSTER + wind OUT toward pull side = boost park_factor.
-  L5/L10 hot streak (recent form) = boost hit probability.
-
-PRODUCE EXACTLY THESE SECTIONS:
+PRODUCE EXACTLY THESE 6 SECTIONS:
 
 ## TOP 6 HOME RUN PICKS
-Show your probability math for each pick. Only include if edge ≥ 3%.
+Ranked by Adj-HPI. Best matchup = #1. OPEN/HALF gate + pitcher HR/9>=1.2 + Barrel%>=12.
 #N. BATTER (TEAM) | FACES: PITCHER (TEAM) | +ODDS
-  PROB: True ~X% vs Implied X% = +X% EDGE
-  WHY: [Barrel%, ISO, FB/LD EV, pitcher HR/9 or FB%, park, wind — the specific numbers]
+  WHY: [Barrel%, gate, pitcher HR/9, park/wind — 2 sentences]
 
 ## TOP 6 HIT PICKS
-Show probability math. Only include if edge ≥ 3%.
+Ranked by contact quality × PA volume × gate. COLD gap = priority.
 #N. BATTER (TEAM) | FACES: PITCHER (TEAM) | ODDS
-  PROB: True ~X% vs Implied X% = +X% EDGE
-  WHY: [wOBA, xwOBA, COLD gap, lineup spot, gate, L10 form]
+  WHY: [wOBA, xwOBA or COLD gap, lineup spot, gate — 2 sentences]
 
 ## TOP 6 TOTAL BASES PICKS
-1.5+TB or 2.5+TB. Barrel%≥12 + booster park OR wind OUT + wOBA≥.350.
-#N. BATTER (TEAM) | FACES: PITCHER (TEAM) | 1.5+TB or 2.5+TB | ODDS
-  WHY: [why TB beats hit prop — XBH environment]
+1.5+TB or 2.5+TB. Only when Barrel%>=12 + booster park OR wind OUT + wOBA>=.350.
+#N. BATTER (TEAM) | FACES: PITCHER (TEAM) | TB | ODDS
+  WHY: [why TB over hit — 1 sentence]
+If none qualify: NO QUALIFYING TB PICKS
 
 ## TOP 6 NRFI PICKS
-Elite starter K%≥25% or xFIP≤3.50 vs weak top-order. Target above 62% NRFI probability.
+Elite starter K%>=25% or xFIP<=3.50 vs weak top-order hitters.
 #N. Away @ Home | ODDS
-  WHY: [starter K% or xFIP + opposing 1-2 spot weakness]
-If none: NO QUALIFYING NRFI PICKS
+  WHY: [1-2 sentences]
+If none qualify: NO QUALIFYING NRFI PICKS
 
 ## TOP 6 OVER/UNDER PICKS
-F5 versions preferred when applicable. Label: OVER / UNDER / F5 OVER / F5 UNDER
+OVER: both pitchers gate 0-1 + environment. UNDER: both gates 2+ + no leaky pens.
+Label: OVER / UNDER / F5 OVER / F5 UNDER
 #N. Away @ Home | LINE | ODDS
-  WHY: [both starters gate, weather, pen ERA, key factors]
+  WHY: [starters, weather, pens — 2 sentences]
 
 ## TOP 6 MONEYLINE PICKS
-3+ factors required. Home dogs +120 or better = priority. Label: [HOME DOG]
-ML DIRECTION REMINDER: Pitcher suppresses the OPPOSING team.
-A team benefits from their OPPONENT having a bad pitcher — not from their own pitcher being bad.
+3+ factors. Home dogs +120 or better = priority. Label: [HOME DOG]
+Name which pitcher pitches FOR which team — direction matters.
 #N. TEAM | ML | ODDS
-  WHY: [3 specific factors — name which pitcher pitches FOR which team]
+  WHY: [3 factors, pitcher direction stated correctly]
 """
 
         lists_ctx = '\n'.join(parlay_ctx_lines)
