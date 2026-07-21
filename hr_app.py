@@ -141,7 +141,13 @@ SYSTEM_PROMPT = (
     "TOTALS:\n"
     "  OVER: both pitchers gate 0-1 + wind OUT 8mph+ + temp>80F + pen ERA>5.00\n"
     "  UNDER: both gates 2+ + wind IN/dome + cold <55F + pen ERA<3.50\n"
-    "  F5 UNDER: one or both starters CLOSED. F5 OVER: starter Form14 ERA>6.00 + OPEN gate\n\n"
+    "  WIND-IN RULE: only suppresses when pitchers are fly-ball heavy (FB%>=38).\n"
+    "    Grounder pitchers (FB%<32) + wind-in = irrelevant. Balls dont fly anyway.\n"
+    "  WEAK PEN RULE: pen ERA>4.80 anywhere = OVER signal. Cannot pick UNDER with leaky pen.\n"
+    "  MIXED STARTERS (one CLOSED + one OPEN): pick F5 OVER while OPEN pitcher is in.\n"
+    "    Not full-game OVER — the CLOSED starter suppresses his half of the scoring.\n"
+    "  F5 UNDER: one or both starters CLOSED. F5 OVER: Form14 ERA>6.00 + OPEN gate.\n"
+    "  F5 lines are 4.5 or 5.0 runs — never 2.5 (that is a team total).\n\n"
 
     "OUTPUT FORMAT:\n\n"
 
@@ -1611,7 +1617,7 @@ Input to parse:
 PARLAYS_SYSTEM = """You are Marcus Cole. Build parlays from the picks provided.
 
 RULES:
-- Only use picks from the lists above
+- Only use picks from the TOP 6 lists above — no unvetted players in parlays
 - No same-game HR parlays (independent events)
 - Same-game hit parlays OK when correlated with team scoring
 - Max 2 legs from same game unless correlated
@@ -1635,7 +1641,7 @@ HIT VOLUME: 3-5 top-order hitters, max PA, different games
 ML PARLAY: 2-4 ML picks, 3+ factors each
 MIXED VALUE: 3-4 legs, HR + hit + ML
 REGRESSION STACK: 3-5 COLD gap buys across games
-PITCHER VULTURE: 3-4 batters all face pitchers HR/9>=1.4
+PITCHER VULTURE: 3-4 batters all face pitchers HR/9>=1.2 — NEVER use this for pitchers HR/9<1.0 (those are suppressors)
 NRFI PARLAY: 2-3 NRFI legs
 SLEEPER BOMB: 4-5 plus-money picks, all +200 or better
 
@@ -2776,12 +2782,29 @@ A pick only qualifies if TRUE PROB > IMPLIED PROB by at least 3%.
 This is the only thing that matters long-term. Metrics are inputs to probability — not picks themselves.
 
 HOW TO COMPUTE TRUE HR PROBABILITY:
-  base = Barrel% × 0.045  (Barrel% 15 = ~6.75% base HR rate per game)
+  base = Barrel% × 0.045 × num_PA  (Barrel% 15 × 4.5 PA = ~3.04% base; ×HR-per-barrel 32% = 9.7%)
+  Better formula: (Barrel% / 100) × num_PA × 0.32 = expected_HRs → prob = 1 - (1-per_PA_rate)^PA
+  Simple approximation: base_prob = Barrel% × 0.045 (single number, not per PA)
+  
   × park_factor  (BOOSTER 1.15-1.35 | NEUTRAL 1.00 | SUPPRESSOR 0.75-0.88)
-  × pitcher_factor  (HR/9: 1.8=×1.65 | 1.5=×1.35 | 1.2=×1.20 | 0.75=×0.68 | FB%≥42=×1.25 additional)
+  × pitcher_factor — CRITICAL: HR/9 direction matters
+    HR/9 ≥ 1.8 = ×1.65 (extreme HR risk — bet hard)
+    HR/9 ≥ 1.5 = ×1.35 (high HR risk)
+    HR/9 ≥ 1.2 = ×1.20 (above avg HR risk)
+    HR/9 1.0-1.2 = ×1.05 (near league average — slight boost)
+    HR/9 0.8-1.0 = ×0.90 (below average — slight suppressor)
+    HR/9 < 0.8  = ×0.75 (HR SUPPRESSOR — reduces true probability)
+    FB% ≥ 42 = additional ×1.20 (fly ball pitcher — balls stay up)
+    FB% ≥ 38 = additional ×1.10
+    LOW HR/9 (< 1.0) IS A SUPPRESSOR NOT A BOOSTER. Never use ×1.4+ for a 0.82 HR/9 pitcher.
   × platoon_factor  (FAV=×1.15 | SAME=×0.88)
   × pa_factor  (4.5PA=×1.10 | 4.0PA=×1.00 | 3.5PA=×0.90)
   = TRUE_PROB
+  
+  EXAMPLE CHECK: Alvarez vs Phillips HR/9=0.82
+    base = 19.2 × 0.045 = 8.64% | park ×1.00 | pitcher ×0.90 (suppressor) | FAV ×1.15 | PA ×1.10
+    = 8.64 × 0.90 × 1.15 × 1.10 = 9.8% true prob vs +320 (23.8% implied) = NEGATIVE EDGE — SKIP
+    This is correct. Low HR/9 pitchers suppress HR props even on elite batters.
 
 HOW TO COMPUTE IMPLIED PROB FROM ODDS:
   +380 odds → 100/(380+100) = 20.8% implied
