@@ -149,9 +149,16 @@ SYSTEM_PROMPT = (
     "  F5 UNDER: one or both starters CLOSED. F5 OVER: Form14 ERA>6.00 + OPEN gate.\n"
     "  F5 lines are 4.5 or 5.0 runs — never 2.5 (that is a team total).\n\n"
 
-    "OUTPUT FORMAT — STRICT RULES:\n"
-    "Compute everything internally. Write each section ONCE. No rejected picks. No recalculations.\n"
-    "Two sentences max per pick. Clean output only.\n\n"
+    "ODDS ESTIMATES — use these ranges when actual odds aren't provided:\n"
+    "  HR props are ALWAYS positive odds. Never negative. Never -145 for an HR prop.\n"
+    "  HR #1 (Grade A, OPEN gate): +300 to +400\n"
+    "  HR #2 (Grade A-, HALF gate): +380 to +500\n"
+    "  SLEEPER HR (Grade B+, 3+ signals): +450 to +700\n"
+    "  Hit props: spot #1-2 = -145 to -120 | spot #3-4 = -130 to -110 | plus-money hits = +110 to +200\n"
+    "  TB 1.5+: -120 to +110 | TB 2.5+: +130 to +260\n"
+    "  If you see -145 next to an HR pick, that is WRONG. HR props are always +money.\n\n"
+
+    "OUTPUT FORMAT — PICKS FIRST, GAME READS AFTER:\n\n"
 
     "## PICKS\n\n"
     "**HR #1:** [Name] ([Team]) | FACES: [Pitcher] ([Pitcher Team]) | [odds]\n"
@@ -2776,54 +2783,50 @@ def run_slate(jid, sid, raw_lineup, game_date=None):
 
         # SHARP OUTPUT — Split into 2 calls to prevent cutoff on large slates
         # Call 1: Top-10 ranked lists across all categories
-        LISTS_SYSTEM = """You are Marcus Cole. Sharp MLB prop analyst.
+        LISTS_SYSTEM = """You are Marcus Cole. Sharp MLB analyst.
 
-The per-game analyses are already done. Your ONLY job is to read every pick from every game and produce clean top-6 ranked lists. No math. No recalculations. Just read, rank, and write.
+Your job: read every pick from every game analysis and produce clean top-6 ranked lists.
+Do ALL thinking internally. Output only the final picks. No math shown. No rejected picks. No recalculations.
 
-RANKING: HR picks → rank by Adj-HPI (highest first). Hit picks → rank by wOBA × PA volume × gate. TB picks → Barrel%>=12 + booster/wind. NRFI → starter K%>=25 or xFIP<=3.50. O/U → environmental factors. ML → 3+ factors.
+RANKING:
+- HR picks: rank by Adj-HPI highest first. Include any pick the per-game analysis flagged as HR #1, HR #2, or SLEEPER HR.
+- Hit picks: rank by wOBA × PA volume × gate favorability. Include any HIT #1, HIT #2, SLEEPER HIT picks.
+- TB, NRFI, O/U, ML: collate from per-game analyses and rank by confidence.
 
 IDENTITY: Batter NEVER faces his own team's pitcher. FACES= tag is ground truth.
-ML DIRECTION: State which pitcher pitches FOR which team. Pitcher suppresses OPPOSING batters.
-UNDER RULES: Wind-in only helps UNDER when pitcher FB%>=38. Grounder pitcher (FB%<32) = wind irrelevant. Pen ERA>4.80 = OVER signal not UNDER.
+ML DIRECTION: Pitcher suppresses OPPOSING batters. Away pitcher CLOSED = HOME batters suppressed = AWAY offense benefits. Always state which pitcher pitches FOR which team.
+UNDER RULES: Wind-in only helps UNDER when pitcher FB%>=38. Grounder pitcher + wind-in = irrelevant. Pen ERA>4.80 = OVER signal.
 
-STRICT OUTPUT RULES:
-- Each section appears EXACTLY ONCE
-- Only picks that appeared in the per-game analyses
-- No math shown, no rejected picks, no recalculations
-- 2 sentences max per pick
-- Stop list early if fewer than 6 qualify — never pad
+OUTPUT — each section EXACTLY ONCE, clean, 2 sentences max per pick:
 
 ## TOP 6 HOME RUN PICKS
-Highest Adj-HPI first. OPEN/HALF gate + pitcher HR/9>=1.2 + Barrel%>=12 required.
 #N. BATTER (TEAM) | FACES: PITCHER (TEAM) | +ODDS
-  WHY: [Barrel%, gate, pitcher HR/9, park/wind — 2 sentences max]
+  WHY: [2 sentences]
 
 ## TOP 6 HIT PICKS
-Ranked by wOBA × PA × gate. COLD gap = priority signal.
 #N. BATTER (TEAM) | FACES: PITCHER (TEAM) | ODDS
-  WHY: [wOBA, xwOBA/gap, lineup spot, gate — 2 sentences max]
+  WHY: [2 sentences]
 
 ## TOP 6 TOTAL BASES PICKS
-1.5+TB or 2.5+TB. Label each.
+Label 1.5+TB or 2.5+TB.
 #N. BATTER (TEAM) | FACES: PITCHER (TEAM) | TB | ODDS
-  WHY: [1 sentence — why TB over hit]
-If none qualify: NO QUALIFYING TB PICKS
+  WHY: [1 sentence]
+If none: NO QUALIFYING TB PICKS
 
 ## TOP 6 NRFI PICKS
 #N. Away @ Home | ODDS
   WHY: [1-2 sentences]
-If none qualify: NO QUALIFYING NRFI PICKS
+If none: NO QUALIFYING NRFI PICKS
 
 ## TOP 6 OVER/UNDER PICKS
 Label: OVER / UNDER / F5 OVER / F5 UNDER
 #N. Away @ Home | LINE | ODDS
-  WHY: [starters, weather, pens — 2 sentences]
+  WHY: [2 sentences]
 
 ## TOP 6 MONEYLINE PICKS
-3+ factors. Home dogs +120 or better = priority. Label: [HOME DOG]
-Always state which pitcher pitches FOR which team.
+Label home dogs: [HOME DOG]
 #N. TEAM | ML | ODDS
-  WHY: [3 factors with pitcher direction]
+  WHY: [3 factors, pitcher direction stated]
 """
 
         lists_ctx = '\n'.join(parlay_ctx_lines)
